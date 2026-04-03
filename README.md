@@ -1,5 +1,7 @@
 # Snobby
 
+**S**ervice**N**ow **OB**sidian s**Y**nc
+
 Bidirectional sync between an Obsidian vault and a ServiceNow Scripted REST API. Devs write documentation in Obsidian with full markdown support, and the plugin keeps everything in sync with ServiceNow for shared team visibility.
 
 ## What It Does
