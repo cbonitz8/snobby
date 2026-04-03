@@ -460,11 +460,32 @@ export class SyncEngine {
 
   // --- Helpers ---
 
+  /** Resolve a SN choice value to its display label using cached metadata */
+  private resolveLabel(type: "projects" | "categories", value: string): string {
+    if (!this.cachedMetadata || !value) return value;
+    const entry = this.cachedMetadata[type].find((e) => e.value === value);
+    return entry?.label ?? value;
+  }
+
+  /** Ensure metadata is cached for label resolution */
+  async ensureMetadata() {
+    if (this.cachedMetadata) return;
+    const response = await this.apiClient.getMetadata();
+    if (response.ok && response.data) {
+      this.cachedMetadata = response.data;
+    }
+  }
+
   async createLocalFile(doc: SNDocument) {
     const { folderMapping, frontmatterPrefix } = this.plugin.settings;
 
+    // Use display labels for folder names, not SN choice values
+    await this.ensureMetadata();
+    const projectLabel = this.resolveLabel("projects", doc.project);
+    const categoryLabel = doc.category; // category folder names come from folderMapping, not the value
+
     const filePath = normalizePath(
-      resolveFilePath(folderMapping, doc.title, doc.project, doc.category, "")
+      resolveFilePath(folderMapping, doc.title, projectLabel, categoryLabel, "")
     );
 
     // Handle title collisions
