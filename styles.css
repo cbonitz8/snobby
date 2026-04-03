@@ -20,16 +20,54 @@
   line-height: 1.6;
 }
 
-.sn-routes-reference {
-  margin: 16px 0;
-  padding: 12px;
-  background: var(--background-secondary);
+.sn-setup-info {
+  margin-bottom: 16px;
+  border: 1px solid var(--background-modifier-border);
   border-radius: 8px;
+  padding: 0;
 }
 
-.sn-routes-reference h3 {
-  margin: 0 0 4px;
+.sn-setup-info summary {
+  padding: 10px 14px;
+  cursor: pointer;
+  font-weight: 600;
   font-size: 0.95em;
+  color: var(--text-muted);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sn-setup-info summary::before {
+  content: "▶";
+  font-size: 0.7em;
+  transition: transform 0.15s;
+}
+
+.sn-setup-info[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.sn-setup-info[open] {
+  padding-bottom: 8px;
+}
+
+.sn-setup-info .setting-item {
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
+.sn-routes-reference {
+  margin: 8px 14px 4px;
+  padding: 12px;
+  background: var(--background-secondary);
+  border-radius: 6px;
+}
+
+.sn-routes-reference h4 {
+  margin: 0 0 4px;
+  font-size: 0.9em;
 }
 
 .sn-routes-table {

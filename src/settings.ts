@@ -36,8 +36,12 @@ export class SNSyncSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    // --- Documentation Link ---
-    new Setting(containerEl)
+    // --- Setup Information (collapsible) ---
+    const details = containerEl.createEl("details", { cls: "sn-setup-info" });
+    const summary = details.createEl("summary");
+    summary.createEl("span", { text: "Setup Information" });
+
+    new Setting(details)
       .setName("Documentation")
       .setDesc("Setup guide, API contract, and configuration reference")
       .addButton((button) =>
@@ -45,6 +49,38 @@ export class SNSyncSettingTab extends PluginSettingTab {
           window.open("https://github.com/cbonitz8/sn-obsidian-sync#readme");
         })
       );
+
+    const routesEl = details.createDiv({ cls: "sn-routes-reference" });
+    routesEl.createEl("h4", { text: "Expected API Routes" });
+    routesEl.createEl("p", {
+      text: "Your Scripted REST API must implement these endpoints relative to the API path configured below:",
+      cls: "setting-item-description",
+    });
+    const routeTable = routesEl.createEl("table", { cls: "sn-routes-table" });
+    const routes = [
+      ["GET", "/documents", "List all documents"],
+      ["GET", "/documents/{id}", "Get single document"],
+      ["POST", "/documents", "Create document"],
+      ["PUT", "/documents/{id}", "Update document"],
+      ["DELETE", "/documents/{id}", "Delete document"],
+      ["GET", "/documents/changes?since={ts}", "Get changes since timestamp"],
+      ["POST", "/documents/{id}/checkout", "Lock document"],
+      ["POST", "/documents/{id}/checkin", "Unlock document"],
+      ["POST", "/documents/{id}/force-checkin", "Force unlock"],
+      ["GET", "{metadataPath}", "Get categories, projects, tags"],
+    ];
+    const thead = routeTable.createEl("thead");
+    const headerRow = thead.createEl("tr");
+    headerRow.createEl("th", { text: "Method" });
+    headerRow.createEl("th", { text: "Path" });
+    headerRow.createEl("th", { text: "Purpose" });
+    const tbody = routeTable.createEl("tbody");
+    for (const [method, path, purpose] of routes) {
+      const row = tbody.createEl("tr");
+      row.createEl("td", { text: method });
+      row.createEl("td", { text: path, cls: "sn-route-path" });
+      row.createEl("td", { text: purpose });
+    }
 
     // --- Connection Section ---
     containerEl.createEl("h2", { text: "Connection" });
@@ -87,38 +123,6 @@ export class SNSyncSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
-
-    // --- Expected API Routes ---
-    const routesEl = containerEl.createDiv({ cls: "sn-routes-reference" });
-    routesEl.createEl("h3", { text: "Expected API Routes" });
-    routesEl.createEl("p", {
-      text: "Your Scripted REST API must implement these endpoints relative to the API path above:",
-      cls: "setting-item-description",
-    });
-    const routeTable = routesEl.createEl("table", { cls: "sn-routes-table" });
-    const routes = [
-      ["GET", "/documents", "List all documents"],
-      ["GET", "/documents/{id}", "Get single document"],
-      ["POST", "/documents", "Create document"],
-      ["PUT", "/documents/{id}", "Update document"],
-      ["DELETE", "/documents/{id}", "Delete document"],
-      ["GET", "/documents/changes?since={ts}", "Get changes since timestamp"],
-      ["POST", "/documents/{id}/checkout", "Lock document"],
-      ["POST", "/documents/{id}/checkin", "Unlock document"],
-      ["POST", "/documents/{id}/force-checkin", "Force unlock"],
-    ];
-    const thead = routeTable.createEl("thead");
-    const headerRow = thead.createEl("tr");
-    headerRow.createEl("th", { text: "Method" });
-    headerRow.createEl("th", { text: "Path" });
-    headerRow.createEl("th", { text: "Purpose" });
-    const tbody = routeTable.createEl("tbody");
-    for (const [method, path, purpose] of routes) {
-      const row = tbody.createEl("tr");
-      row.createEl("td", { text: method });
-      row.createEl("td", { text: path, cls: "sn-route-path" });
-      row.createEl("td", { text: purpose });
-    }
 
     new Setting(containerEl)
       .setName("OAuth Redirect URI")
