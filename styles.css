@@ -19,3 +19,42 @@
   font-size: 0.85em;
   line-height: 1.6;
 }
+
+.sn-browser {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.sn-browser-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding: 0 8px;
+}
+
+.sn-browser-tab {
+  padding: 8px 16px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 0.9em;
+  color: var(--text-muted);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.sn-browser-tab.is-active {
+  color: var(--text-normal);
+  border-bottom-color: var(--interactive-accent);
+}
+
+.sn-browser-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.sn-browser-loading {
+  color: var(--text-muted);
+  font-style: italic;
+}
