@@ -460,7 +460,7 @@ export class SyncEngine {
 
   // --- Helpers ---
 
-  private async createLocalFile(doc: SNDocument) {
+  async createLocalFile(doc: SNDocument) {
     const { folderMapping, frontmatterPrefix } = this.plugin.settings;
 
     const filePath = normalizePath(
@@ -501,7 +501,7 @@ export class SyncEngine {
     };
   }
 
-  private async ensureFolderExists(folderPath: string) {
+  async ensureFolderExists(folderPath: string) {
     if (this.plugin.app.vault.getAbstractFileByPath(folderPath)) return;
     const parts = folderPath.split("/");
     let current = "";
@@ -513,7 +513,7 @@ export class SyncEngine {
     }
   }
 
-  private async resolveCollision(path: string, sysId: string): Promise<string> {
+  async resolveCollision(path: string, sysId: string): Promise<string> {
     const existing = this.plugin.app.vault.getAbstractFileByPath(path);
     if (!existing) return path;
 
