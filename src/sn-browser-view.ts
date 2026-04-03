@@ -95,6 +95,41 @@ export class SNBrowserView extends ItemView {
     }
 
     this.isLoading = false;
+
+    // Reconcile docMap with vault — find local files that have sn_sys_id
+    // but aren't tracked in docMap (e.g., from bulk push in another session)
+    await this.reconcileDocMap();
+  }
+
+  private async reconcileDocMap() {
+    const allFiles = this.plugin.app.vault.getMarkdownFiles();
+    const docMap = this.plugin.syncState.docMap;
+    const trackedIds = new Set(Object.keys(docMap));
+    let added = 0;
+
+    for (const file of allFiles) {
+      const cache = this.plugin.app.metadataCache.getFileCache(file);
+      const fm = cache?.frontmatter;
+      if (!fm) continue;
+
+      const prefix = this.plugin.settings.frontmatterPrefix;
+      const sysId = fm[`${prefix}sys_id`];
+      if (!sysId || trackedIds.has(sysId)) continue;
+
+      // Found a local file with sn_sys_id not in docMap — add it
+      docMap[sysId] = {
+        sysId,
+        path: file.path,
+        lastServerTimestamp: "",
+      };
+      trackedIds.add(sysId);
+      added++;
+    }
+
+    if (added > 0) {
+      await this.plugin.saveSettings();
+      console.log(`SN Browser: Reconciled ${added} files into docMap`);
+    }
   }
 
   private getDocStatus(doc: SNDocument): string {
