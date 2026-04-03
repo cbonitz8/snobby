@@ -269,8 +269,144 @@ export class SNBrowserView extends ItemView {
     }
   }
 
+  private getDocsForSelectedNode(): SNDocument[] {
+    const docs = this.getFilteredDocs();
+    if (!this.selectedTreeNode) return docs;
+
+    const parts = this.selectedTreeNode.split("/");
+    const projectMatch = parts[0]?.replace("project:", "") ?? "";
+    const categoryMatch = parts[1]?.replace("category:", "") ?? "";
+
+    return docs.filter((doc) => {
+      const proj = doc.project || "(No Project)";
+      if (proj !== projectMatch) return false;
+      if (categoryMatch) {
+        const cat = doc.category || "(Uncategorized)";
+        if (cat !== categoryMatch) return false;
+      }
+      return true;
+    });
+  }
+
   private renderDocList(container: HTMLElement) {
     const listPane = container.createDiv({ cls: "sn-list-pane" });
-    listPane.createEl("p", { text: "Select a node in the tree" });
+    const docs = this.getDocsForSelectedNode();
+
+    // Action bar
+    const actionBar = listPane.createDiv({ cls: "sn-action-bar" });
+    const selectedCount = this.selectedDocIds.size;
+    actionBar.createEl("span", {
+      text: `${docs.length} documents${selectedCount > 0 ? ` · ${selectedCount} selected` : ""}`,
+      cls: "sn-action-count",
+    });
+
+    if (selectedCount > 0) {
+      const downloadBtn = actionBar.createEl("button", {
+        text: `Download Selected (${selectedCount})`,
+        cls: "sn-action-btn mod-cta",
+      });
+      downloadBtn.addEventListener("click", () => this.downloadSelected());
+    }
+
+    const downloadAllBtn = actionBar.createEl("button", {
+      text: "Download All Not Synced",
+      cls: "sn-action-btn",
+    });
+    downloadAllBtn.addEventListener("click", () => this.downloadAllUnsynced(docs));
+
+    // Document rows
+    const list = listPane.createDiv({ cls: "sn-doc-list" });
+    for (const doc of docs) {
+      const status = this.getDocStatus(doc);
+      const isSelected = this.selectedDocIds.has(doc.sys_id);
+
+      const row = list.createDiv({ cls: `sn-doc-row ${isSelected ? "is-selected" : ""}` });
+
+      // Checkbox
+      const checkbox = row.createEl("input", { type: "checkbox" });
+      checkbox.checked = isSelected;
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) {
+          this.selectedDocIds.add(doc.sys_id);
+        } else {
+          this.selectedDocIds.delete(doc.sys_id);
+        }
+        this.render();
+      });
+
+      // Status icon
+      const statusIcon = status === "synced" ? "●" : "○";
+      const statusColor = status === "synced" ? "var(--color-green)" : "var(--text-faint)";
+      row.createEl("span", { text: statusIcon, cls: "sn-doc-status" }).style.color = statusColor;
+
+      // Title
+      row.createEl("span", { text: doc.title, cls: "sn-doc-title" });
+
+      // Category badge
+      if (doc.category) {
+        const label = this.metadata?.categories.find((c) => c.value === doc.category)?.label ?? doc.category;
+        row.createEl("span", { text: label, cls: "sn-doc-badge" });
+      }
+
+      // Date
+      if (doc.sys_updated_on) {
+        const date = doc.sys_updated_on.split(" ")[0] ?? "";
+        row.createEl("span", { text: date, cls: "sn-doc-meta" });
+      }
+
+      // Checked out indicator
+      if (doc.checked_out_by) {
+        row.createEl("span", { text: "🔒", cls: "sn-doc-lock" });
+      }
+
+      // Double-click to open locally
+      row.addEventListener("dblclick", () => {
+        const entry = this.plugin.syncState.docMap[doc.sys_id];
+        if (entry) {
+          const file = this.plugin.app.vault.getAbstractFileByPath(entry.path);
+          if (file) {
+            this.plugin.app.workspace.getLeaf(false).openFile(file as any);
+          }
+        }
+      });
+    }
+  }
+
+  private async downloadSelected() {
+    const docs = this.serverDocs.filter((d) => this.selectedDocIds.has(d.sys_id));
+    await this.downloadDocs(docs);
+    this.selectedDocIds.clear();
+    this.render();
+  }
+
+  private async downloadAllUnsynced(docs: SNDocument[]) {
+    const unsynced = docs.filter((d) => this.getDocStatus(d) === "not-downloaded");
+    await this.downloadDocs(unsynced);
+    this.render();
+  }
+
+  private async downloadDocs(docs: SNDocument[]) {
+    if (docs.length === 0) {
+      new Notice("No documents to download.");
+      return;
+    }
+
+    new Notice(`Downloading ${docs.length} documents...`);
+    let count = 0;
+
+    for (const doc of docs) {
+      try {
+        await this.plugin.syncEngine.createLocalFile(doc);
+        count++;
+        if (count % 10 === 0) {
+          new Notice(`Downloaded ${count}/${docs.length}...`);
+        }
+      } catch (e) {
+        console.error(`SN Browser: Failed to download ${doc.title}`, e);
+      }
+    }
+
+    await this.plugin.saveSettings();
+    new Notice(`Downloaded ${count} documents.`);
   }
 }

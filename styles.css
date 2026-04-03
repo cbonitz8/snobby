@@ -146,3 +146,95 @@
 .sn-tree-category {
   padding-left: 6px;
 }
+
+.sn-list-pane {
+  flex: 1;
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.sn-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.sn-action-count {
+  font-size: 0.85em;
+  color: var(--text-muted);
+  margin-right: auto;
+}
+
+.sn-action-btn {
+  padding: 4px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--background-modifier-border);
+  background: none;
+  cursor: pointer;
+  font-size: 0.8em;
+}
+
+.sn-action-btn.mod-cta {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+}
+
+.sn-doc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sn-doc-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+
+.sn-doc-row:hover {
+  background: var(--background-secondary);
+}
+
+.sn-doc-row.is-selected {
+  background: var(--background-secondary-alt);
+}
+
+.sn-doc-status {
+  font-size: 0.8em;
+  flex-shrink: 0;
+}
+
+.sn-doc-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sn-doc-badge {
+  font-size: 0.75em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.sn-doc-meta {
+  font-size: 0.75em;
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.sn-doc-lock {
+  font-size: 0.8em;
+  flex-shrink: 0;
+}

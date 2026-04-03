@@ -460,7 +460,7 @@ export class SyncEngine {
 
   // --- Helpers ---
 
-  private async createLocalFile(doc: SNDocument) {
+  async createLocalFile(doc: SNDocument) {
     const { folderMapping, frontmatterPrefix } = this.plugin.settings;
 
     const filePath = normalizePath(
