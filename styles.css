@@ -39,13 +39,12 @@
   cursor: pointer;
   font-size: 0.9em;
   color: var(--text-muted);
-  border-bottom: 2px solid transparent;
   margin-bottom: -1px;
 }
 
 .sn-browser-tab.is-active {
   color: var(--text-normal);
-  border-bottom-color: var(--interactive-accent);
+  box-shadow: inset 0 -2px 0 var(--interactive-accent);
 }
 
 .sn-browser-content {
