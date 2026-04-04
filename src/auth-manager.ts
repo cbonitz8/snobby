@@ -19,7 +19,6 @@ export class AuthManager {
     return this.tokens.refreshToken.length > 0;
   }
 
-  /** Start the OAuth Authorization Code flow by opening the browser */
   startOAuthFlow() {
     const { instanceUrl, oauthClientId, oauthRedirectUri } = this.plugin.settings;
 
@@ -39,7 +38,6 @@ export class AuthManager {
     window.open(authUrl);
   }
 
-  /** Handle the OAuth callback — exchange the auth code for tokens */
   async handleCallback(code: string) {
     const { instanceUrl, oauthClientId, oauthClientSecret, oauthRedirectUri } = this.plugin.settings;
 
@@ -71,7 +69,6 @@ export class AuthManager {
     }
   }
 
-  /** Refresh the access token using the refresh token */
   private async refreshAccessToken(): Promise<boolean> {
     const { instanceUrl, oauthClientId, oauthClientSecret } = this.plugin.settings;
 
@@ -103,7 +100,6 @@ export class AuthManager {
     }
   }
 
-  /** Make an authenticated request. Handles token refresh transparently. */
   async authenticatedFetch(
     url: string,
     options: { method?: string; body?: string; headers?: Record<string, string> } = {}
@@ -113,7 +109,6 @@ export class AuthManager {
       return null;
     }
 
-    // Refresh if token is expired or about to expire
     if (Date.now() >= this.tokens.expiresAt - TOKEN_EXPIRY_BUFFER_MS) {
       const refreshed = await this.refreshAccessToken();
       if (!refreshed) return null;
@@ -137,7 +132,6 @@ export class AuthManager {
     } catch (e: unknown) {
       const err = e as { status?: number };
       if (err.status === 401) {
-        // Token might have been revoked — try refresh once
         const refreshed = await this.refreshAccessToken();
         if (!refreshed) return null;
         headers.Authorization = `Bearer ${this.tokens.accessToken}`;

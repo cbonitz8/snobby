@@ -10,7 +10,6 @@ export class FileWatcher {
   private frontmatterManager: FrontmatterManager;
   private apiClient: ApiClient;
   private debounceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
-  /** Paths currently being written to by the sync engine — skip these to avoid loops */
   private syncWritePaths: Set<string> = new Set();
 
   constructor(plugin: SNSyncPlugin, frontmatterManager: FrontmatterManager, apiClient: ApiClient) {
@@ -19,7 +18,6 @@ export class FileWatcher {
     this.apiClient = apiClient;
   }
 
-  /** Start listening to vault events */
   start() {
     this.plugin.registerEvent(
       this.plugin.app.vault.on("modify", (file) => {
@@ -40,12 +38,10 @@ export class FileWatcher {
     );
   }
 
-  /** Mark a path as being written by the sync engine (suppresses FileWatcher reaction) */
   addSyncWritePath(path: string) {
     this.syncWritePaths.add(path);
   }
 
-  /** Remove a path from the sync-write suppression set */
   removeSyncWritePath(path: string) {
     this.syncWritePaths.delete(path);
   }
@@ -67,7 +63,6 @@ export class FileWatcher {
     if (!this.isSyncedFile(file.path)) return;
     if (this.syncWritePaths.has(file.path)) return;
 
-    // Debounce rapid saves
     const existing = this.debounceTimers.get(file.path);
     if (existing) clearTimeout(existing);
 
@@ -83,12 +78,10 @@ export class FileWatcher {
   private async handleFileModified(file: TFile) {
     const fm = await this.frontmatterManager.read(file);
 
-    // Don't mark dirty if already dirty
     if (fm.synced === false) return;
 
     await this.frontmatterManager.markDirty(file);
 
-    // Auto-checkout if enabled and doc has a sys_id
     if (this.plugin.settings.checkoutOnEdit && fm.sys_id) {
       try {
         await this.apiClient.checkout(fm.sys_id);
@@ -101,7 +94,6 @@ export class FileWatcher {
   private async onDelete(file: TFile) {
     if (!this.isSyncedFile(file.path)) return;
 
-    // Find the sys_id for this file from the docMap
     const entry = Object.values(this.plugin.syncState.docMap).find(
       (e) => e.path === file.path
     );
@@ -116,11 +108,8 @@ export class FileWatcher {
         await this.plugin.saveSettings();
         break;
       case "re-pull":
-        // Do nothing — the next sync cycle will re-create the file
         break;
       case "archive": {
-        // File is already deleted, but we can re-fetch and place in archive
-        // For now, add to ignore list — archive will be handled by sync engine on next pull
         this.plugin.syncState.ignoredIds.push(entry.sysId);
         delete this.plugin.syncState.docMap[entry.sysId];
         await this.plugin.saveSettings();
@@ -132,7 +121,6 @@ export class FileWatcher {
   private async onRename(file: TFile, oldPath: string) {
     if (!this.isSyncedFile(file.path) && !this.isSyncedFile(oldPath)) return;
 
-    // Update docMap to reflect the new path
     const entry = Object.values(this.plugin.syncState.docMap).find(
       (e) => e.path === oldPath
     );
@@ -142,7 +130,6 @@ export class FileWatcher {
     }
   }
 
-  /** Get all files in the sync folder that have sn_synced: false */
   async getDirtyFiles(): Promise<TFile[]> {
     const allFiles = this.plugin.app.vault.getMarkdownFiles();
     const dirtyFiles: TFile[] = [];

@@ -37,7 +37,6 @@ export class SNSyncSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    // --- Setup Information (collapsible) ---
     const details = containerEl.createEl("details", { cls: "sn-setup-info" });
     const summary = details.createEl("summary");
     summary.createEl("span", { text: "Setup Information" });
@@ -83,7 +82,6 @@ export class SNSyncSettingTab extends PluginSettingTab {
       row.createEl("td", { text: purpose });
     }
 
-    // --- Connection Section ---
     containerEl.createEl("h2", { text: "Connection" });
 
     new Setting(containerEl)
@@ -175,7 +173,6 @@ export class SNSyncSettingTab extends PluginSettingTab {
         })
       );
 
-    // --- SN Metadata Section ---
     containerEl.createEl("h2", { text: "ServiceNow Data" });
 
     const metadataContainer = containerEl.createDiv();
@@ -207,7 +204,6 @@ export class SNSyncSettingTab extends PluginSettingTab {
             const meta = response.data;
             console.log("Snobby: metadata parsed", meta);
 
-            // Categories
             const catSection = metadataContainer.createDiv({ cls: "sn-metadata-section" });
             catSection.createEl("h4", { text: "Categories" });
             if (meta.categories && meta.categories.length > 0) {
@@ -219,7 +215,6 @@ export class SNSyncSettingTab extends PluginSettingTab {
               catSection.createEl("p", { text: "None found" });
             }
 
-            // Projects
             const projSection = metadataContainer.createDiv({ cls: "sn-metadata-section" });
             projSection.createEl("h4", { text: "Projects" });
             if (meta.projects && meta.projects.length > 0) {
@@ -231,7 +226,6 @@ export class SNSyncSettingTab extends PluginSettingTab {
               projSection.createEl("p", { text: "None found" });
             }
 
-            // Tags
             const tagSection = metadataContainer.createDiv({ cls: "sn-metadata-section" });
             tagSection.createEl("h4", { text: "Tags" });
             if (meta.tags && meta.tags.length > 0) {
@@ -251,7 +245,6 @@ export class SNSyncSettingTab extends PluginSettingTab {
         })
       );
 
-    // --- Sync Section ---
     containerEl.createEl("h2", { text: "Sync" });
 
     new Setting(containerEl)
@@ -284,7 +277,6 @@ export class SNSyncSettingTab extends PluginSettingTab {
           })
       );
 
-    // --- Behavior Section ---
     containerEl.createEl("h2", { text: "Behavior" });
 
     new Setting(containerEl)
@@ -328,7 +320,6 @@ export class SNSyncSettingTab extends PluginSettingTab {
           })
       );
 
-    // --- Advanced Section ---
     containerEl.createEl("h2", { text: "Advanced" });
 
     new Setting(containerEl)

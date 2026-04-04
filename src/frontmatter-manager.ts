@@ -14,7 +14,6 @@ export class FrontmatterManager {
     this.prefix = prefix;
   }
 
-  /** Read plugin-managed frontmatter fields from a file */
   async read(file: TFile): Promise<SNFrontmatter> {
     const result: SNFrontmatter = {};
     const cache = this.app.metadataCache.getFileCache(file);
@@ -33,7 +32,6 @@ export class FrontmatterManager {
     return result;
   }
 
-  /** Write plugin-managed frontmatter fields to a file */
   async write(file: TFile, fields: Partial<SNFrontmatter>) {
     await this.app.fileManager.processFrontMatter(file, (fm) => {
       if (fields.sys_id !== undefined) fm[`${this.prefix}sys_id`] = fields.sys_id;
@@ -44,19 +42,16 @@ export class FrontmatterManager {
     });
   }
 
-  /** Clear the sys_id field (used when unlinking a doc) */
   async clearSysId(file: TFile) {
     await this.app.fileManager.processFrontMatter(file, (fm) => {
       delete fm[`${this.prefix}sys_id`];
     });
   }
 
-  /** Mark a file as dirty (local edit, not yet synced) */
   async markDirty(file: TFile) {
     await this.write(file, { synced: false });
   }
 
-  /** Mark a file as synced */
   async markSynced(file: TFile) {
     await this.write(file, { synced: true });
   }

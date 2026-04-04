@@ -33,19 +33,16 @@ export class SyncEngine {
     this.conflictResolver = conflictResolver;
   }
 
-  /** Start the sync engine based on settings */
   start() {
     if (this.plugin.settings.syncMode === "interval") {
       this.startInterval();
     }
   }
 
-  /** Stop the sync engine */
   stop() {
     this.stopInterval();
   }
 
-  /** Restart (e.g. after settings change) */
   restart() {
     this.stop();
     this.start();
@@ -55,7 +52,6 @@ export class SyncEngine {
     this.stopInterval();
     const ms = this.plugin.settings.syncIntervalSeconds * 1000;
     this.intervalId = window.setInterval(() => this.sync(), ms);
-    // Register so Obsidian cleans up on unload
     this.plugin.registerInterval(this.intervalId);
   }
 
@@ -66,7 +62,6 @@ export class SyncEngine {
     }
   }
 
-  /** Run a full sync cycle: pull then push */
   async sync(): Promise<SyncResult> {
     if (this.isSyncing) return { pulled: 0, pushed: 0, conflicts: 0, errors: [] };
     this.isSyncing = true;
@@ -94,7 +89,6 @@ export class SyncEngine {
     return result;
   }
 
-  /** Run initial full pull — used on first setup */
   async initialPull(): Promise<SyncResult> {
     if (this.isSyncing) return { pulled: 0, pushed: 0, conflicts: 0, errors: [] };
     this.isSyncing = true;
@@ -136,7 +130,6 @@ export class SyncEngine {
     return result;
   }
 
-  /** Bulk push all local files that have sn_ metadata but no sys_id yet */
   async bulkPush(): Promise<SyncResult> {
     if (this.isSyncing) return { pulled: 0, pushed: 0, conflicts: 0, errors: [] };
     this.isSyncing = true;
@@ -148,7 +141,6 @@ export class SyncEngine {
       const allFiles = this.plugin.app.vault.getMarkdownFiles();
       const candidates: TFile[] = [];
 
-      // Find files with sn_category but no sn_sys_id
       for (const file of allFiles) {
         const fm = await this.frontmatterManager.read(file);
         if (fm.category && !fm.sys_id) {
@@ -181,7 +173,6 @@ export class SyncEngine {
 
           const newDoc = createResult.data;
 
-          // Write sys_id back and mark synced
           this.fileWatcher.addSyncWritePath(file.path);
           await this.frontmatterManager.write(file, {
             sys_id: newDoc.sys_id,
@@ -189,7 +180,6 @@ export class SyncEngine {
           });
           this.fileWatcher.removeSyncWritePath(file.path);
 
-          // Track in docMap
           this.plugin.syncState.docMap[newDoc.sys_id] = {
             sysId: newDoc.sys_id,
             path: file.path,
@@ -197,8 +187,6 @@ export class SyncEngine {
           };
 
           result.pushed++;
-
-          // Progress notice every 10 files
           if ((i + 1) % 10 === 0) {
             new Notice(`Bulk push: ${i + 1}/${total} uploaded`);
           }
@@ -226,7 +214,6 @@ export class SyncEngine {
     return result;
   }
 
-  /** Re-push all synced files to update content in SN (e.g., after format change) */
   async bulkUpdate(): Promise<SyncResult> {
     if (this.isSyncing) return { pulled: 0, pushed: 0, conflicts: 0, errors: [] };
     this.isSyncing = true;
@@ -238,7 +225,6 @@ export class SyncEngine {
       const allFiles = this.plugin.app.vault.getMarkdownFiles();
       const candidates: TFile[] = [];
 
-      // Find files with sn_sys_id (already pushed, need content update)
       for (const file of allFiles) {
         const fm = await this.frontmatterManager.read(file);
         if (fm.sys_id) {
@@ -299,11 +285,9 @@ export class SyncEngine {
     return result;
   }
 
-  // --- Pull Phase ---
-
   private async pull(result: SyncResult) {
     const since = this.plugin.syncState.lastSyncTimestamp;
-    if (!since) return; // No previous sync — need initialPull instead
+    if (!since) return;
 
     const response = await this.apiClient.getChanges(since);
     if (!response.ok || !response.data) {
@@ -313,8 +297,7 @@ export class SyncEngine {
 
     const docs = Array.isArray(response.data) ? response.data : [response.data];
     for (const doc of docs) {
-      // Skip ignored docs
-      if (this.plugin.syncState.ignoredIds.includes(doc.sys_id)) continue;
+        if (this.plugin.syncState.ignoredIds.includes(doc.sys_id)) continue;
 
       try {
         await this.handlePulledDoc(doc, result);
@@ -329,32 +312,25 @@ export class SyncEngine {
     const mapEntry = this.plugin.syncState.docMap[doc.sys_id];
 
     if (mapEntry) {
-      // File exists locally
       const file = this.plugin.app.vault.getAbstractFileByPath(mapEntry.path);
       if (!(file instanceof TFile)) {
-        // File was deleted outside our watcher — re-create
         await this.createLocalFile(doc);
         result.pulled++;
         return;
       }
 
-      // Content comparison: sys_updated_on can bump for non-content reasons
-      // (lock cleanup, metadata-only updates), so compare actual content
+      // sys_updated_on can bump for non-content reasons, so compare actual content
       const localContent = await this.getFileContent(file);
       const contentChanged = localContent !== doc.content;
 
       if (!contentChanged) {
-        // Content is identical (including frontmatter) — nothing to update
         mapEntry.lastServerTimestamp = doc.sys_updated_on;
       } else {
-        // Content actually differs
         const fm = await this.frontmatterManager.read(file);
         if (fm.synced === false) {
-          // Local is dirty AND remote content changed — real conflict
           await this.conflictResolver.applyConflict(file, doc.content);
           result.conflicts++;
         } else {
-          // Local is clean — safe to overwrite with remote content (includes frontmatter)
           this.fileWatcher.addSyncWritePath(file.path);
           await this.plugin.app.vault.modify(file, doc.content);
           this.fileWatcher.removeSyncWritePath(file.path);
@@ -363,13 +339,10 @@ export class SyncEngine {
         }
       }
     } else {
-      // New doc from server
       await this.createLocalFile(doc);
       result.pulled++;
     }
   }
-
-  // --- Push Phase ---
 
   private async push(result: SyncResult) {
     const dirtyFiles = await this.fileWatcher.getDirtyFiles();
@@ -388,11 +361,9 @@ export class SyncEngine {
     const fm = await this.frontmatterManager.read(file);
     const content = await this.getFileContent(file);
 
-    // Don't push files with unresolved conflicts
     if (hasConflictMarkers(content)) return;
 
     if (fm.sys_id) {
-      // Existing doc — checkout, update, checkin
       const checkoutResult = await this.apiClient.checkout(fm.sys_id);
       if (!checkoutResult.ok && checkoutResult.status === 423) {
         const lockedBy = (checkoutResult.data as SNDocument | null)?.checked_out_by ?? "another user";
@@ -407,11 +378,9 @@ export class SyncEngine {
 
       if (!updateResult.ok) {
         if (updateResult.status === 409) {
-          // Server-side conflict — compare content before injecting markers
           const latest = await this.apiClient.getDocument(fm.sys_id);
           if (latest.ok && latest.data) {
             if (latest.data.content === content) {
-              // Content is identical — no real conflict, re-acquire lock and push
               await this.apiClient.checkout(fm.sys_id);
               const retryResult = await this.apiClient.updateDocument(fm.sys_id, {
                 content,
@@ -425,7 +394,6 @@ export class SyncEngine {
                 result.pushed++;
               }
             } else {
-              // Content actually differs — real conflict
               await this.conflictResolver.applyConflict(file, latest.data.content);
               result.conflicts++;
             }
@@ -442,7 +410,6 @@ export class SyncEngine {
       await this.frontmatterManager.markSynced(file);
       this.fileWatcher.removeSyncWritePath(file.path);
 
-      // Update docMap timestamp
       const entry = this.plugin.syncState.docMap[fm.sys_id];
       if (entry && updateResult.data) {
         entry.lastServerTimestamp = updateResult.data.sys_updated_on;
@@ -450,13 +417,11 @@ export class SyncEngine {
 
       result.pushed++;
     } else {
-      // New doc — use frontmatter metadata if available, otherwise prompt
       let category = fm.category ?? "";
       let project = fm.project ?? "";
       let tags = fm.tags ?? "";
 
       if (!category && !project) {
-        // No metadata in frontmatter — prompt the user
         if (!this.cachedMetadata) {
           const metaResponse = await this.apiClient.getMetadata();
           if (metaResponse.ok && metaResponse.data) {
@@ -471,7 +436,7 @@ export class SyncEngine {
           tags,
         });
 
-        if (!userInput) return; // User cancelled
+        if (!userInput) return;
         category = userInput.category;
         project = userInput.project;
         tags = userInput.tags;
@@ -502,7 +467,6 @@ export class SyncEngine {
       });
       this.fileWatcher.removeSyncWritePath(file.path);
 
-      // Add to docMap
       this.plugin.syncState.docMap[newDoc.sys_id] = {
         sysId: newDoc.sys_id,
         path: file.path,
@@ -513,16 +477,12 @@ export class SyncEngine {
     }
   }
 
-  // --- Helpers ---
-
-  /** Resolve a SN choice value to its display label using cached metadata */
   private resolveLabel(type: "projects" | "categories", value: string): string {
     if (!this.cachedMetadata || !value) return value;
     const entry = this.cachedMetadata[type].find((e) => e.value === value);
     return entry?.label ?? value;
   }
 
-  /** Ensure metadata is cached for label resolution */
   async ensureMetadata() {
     if (this.cachedMetadata) return;
     const response = await this.apiClient.getMetadata();
@@ -532,39 +492,33 @@ export class SyncEngine {
   }
 
   async createLocalFile(doc: SNDocument) {
-    // Skip if already tracked locally
     const existing = this.plugin.syncState.docMap[doc.sys_id];
     if (existing) {
       const file = this.plugin.app.vault.getAbstractFileByPath(existing.path);
-      if (file) return; // already exists locally
+      if (file) return;
     }
 
     const { folderMapping } = this.plugin.settings;
 
-    // Use display labels for folder names, not SN choice values
     await this.ensureMetadata();
     const projectLabel = this.resolveLabel("projects", doc.project);
-    const categoryLabel = doc.category; // category folder names come from folderMapping, not the value
+    const categoryLabel = doc.category;
 
     const filePath = normalizePath(
       resolveFilePath(folderMapping, doc.title, projectLabel, categoryLabel, "")
     );
 
-    // Handle title collisions
     const finalPath = await this.resolveCollision(filePath, doc.sys_id);
 
-    // Ensure parent directories exist (recursive)
     const parentDir = finalPath.substring(0, finalPath.lastIndexOf("/"));
     if (parentDir) {
       await this.ensureFolderExists(parentDir);
     }
 
-    // Write file content directly — frontmatter is stored in SN content field
     this.fileWatcher.addSyncWritePath(finalPath);
     await this.plugin.app.vault.create(finalPath, doc.content);
     this.fileWatcher.removeSyncWritePath(finalPath);
 
-    // Track in docMap
     this.plugin.syncState.docMap[doc.sys_id] = {
       sysId: doc.sys_id,
       path: finalPath,
@@ -588,7 +542,6 @@ export class SyncEngine {
     const existing = this.plugin.app.vault.getAbstractFileByPath(path);
     if (!existing) return path;
 
-    // Append sys_id to avoid collision: "My Doc (abc123).md"
     const ext = ".md";
     const base = path.slice(0, -ext.length);
     return `${base} (${sysId.slice(0, 6)})${ext}`;

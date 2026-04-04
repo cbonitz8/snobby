@@ -46,7 +46,6 @@ export class SNBrowserView extends ItemView {
     container.empty();
     container.addClass("sn-browser");
 
-    // Tab bar
     const tabBar = container.createDiv({ cls: "sn-browser-tabs" });
     const browseTab = tabBar.createEl("button", {
       text: "Browse SN",
@@ -66,7 +65,6 @@ export class SNBrowserView extends ItemView {
       this.render();
     });
 
-    // Content area
     const content = container.createDiv({ cls: "sn-browser-content" });
 
     if (this.activeTab === "browse") {
@@ -96,8 +94,6 @@ export class SNBrowserView extends ItemView {
 
     this.isLoading = false;
 
-    // Reconcile docMap with vault — find local files that have sn_sys_id
-    // but aren't tracked in docMap (e.g., from bulk push in another session)
     await this.reconcileDocMap();
   }
 
@@ -116,7 +112,6 @@ export class SNBrowserView extends ItemView {
       const sysId = fm[`${prefix}sys_id`];
       if (!sysId || trackedIds.has(sysId)) continue;
 
-      // Found a local file with sn_sys_id not in docMap — add it
       docMap[sysId] = {
         sysId,
         path: file.path,
@@ -169,7 +164,6 @@ export class SNBrowserView extends ItemView {
       return;
     }
 
-    // Filter bar
     const filterBar = container.createDiv({ cls: "sn-filter-bar" });
 
     const projectSelect = filterBar.createEl("select", { cls: "sn-filter-select" });
@@ -226,14 +220,12 @@ export class SNBrowserView extends ItemView {
       this.render();
     });
 
-    // Two-pane container
     const panes = container.createDiv({ cls: "sn-browser-panes" });
     this.renderTree(panes);
     this.renderDocList(panes);
   }
 
   private renderSettingsTab(container: HTMLElement) {
-    // Sync overview stats
     const stats = container.createDiv({ cls: "sn-sync-stats" });
     const totalServer = this.serverDocs.length;
     const totalLocal = Object.keys(this.plugin.syncState.docMap).length;
@@ -245,7 +237,6 @@ export class SNBrowserView extends ItemView {
     statGrid.createDiv({ cls: "sn-stat" }).innerHTML = `<span class="sn-stat-value">${totalLocal}</span><span class="sn-stat-label">Downloaded</span>`;
     statGrid.createDiv({ cls: "sn-stat" }).innerHTML = `<span class="sn-stat-value">${excludeCount}</span><span class="sn-stat-label">Excluded Paths</span>`;
 
-    // Exclude list
     const excludeSection = container.createDiv({ cls: "sn-exclude-section" });
     excludeSection.createEl("h3", { text: "Excluded from Sync" });
     excludeSection.createEl("p", {
@@ -292,7 +283,6 @@ export class SNBrowserView extends ItemView {
     const treePane = container.createDiv({ cls: "sn-tree-pane" });
     const docs = this.getFilteredDocs();
 
-    // Group by project → category
     const tree = new Map<string, Map<string, SNDocument[]>>();
     for (const doc of docs) {
       const proj = doc.project || "(No Project)";
@@ -303,7 +293,6 @@ export class SNBrowserView extends ItemView {
       projMap.get(cat)!.push(doc);
     }
 
-    // "All" node
     const allNode = treePane.createDiv({ cls: `sn-tree-node ${!this.selectedTreeNode ? "is-active" : ""}` });
     allNode.createEl("span", { text: `All (${docs.length})` });
     allNode.addEventListener("click", () => {
@@ -311,7 +300,6 @@ export class SNBrowserView extends ItemView {
       this.render();
     });
 
-    // Project nodes
     for (const [project, categories] of tree) {
       const projKey = `project:${project}`;
       const projCount = Array.from(categories.values()).reduce((sum, d) => sum + d.length, 0);
@@ -396,7 +384,6 @@ export class SNBrowserView extends ItemView {
     const listPane = container.createDiv({ cls: "sn-list-pane" });
     const docs = this.getDocsForSelectedNode();
 
-    // Action bar
     const actionBar = listPane.createDiv({ cls: "sn-action-bar" });
     const selectedCount = this.selectedDocIds.size;
     actionBar.createEl("span", {
@@ -418,7 +405,6 @@ export class SNBrowserView extends ItemView {
     });
     downloadAllBtn.addEventListener("click", () => this.downloadAllUnsynced(docs));
 
-    // Document rows
     const list = listPane.createDiv({ cls: "sn-doc-list" });
     for (const doc of docs) {
       const status = this.getDocStatus(doc);
@@ -426,7 +412,6 @@ export class SNBrowserView extends ItemView {
 
       const row = list.createDiv({ cls: `sn-doc-row ${isSelected ? "is-selected" : ""}` });
 
-      // Checkbox
       const checkbox = row.createEl("input", { type: "checkbox" });
       checkbox.checked = isSelected;
       checkbox.addEventListener("change", () => {
@@ -438,32 +423,26 @@ export class SNBrowserView extends ItemView {
         this.render();
       });
 
-      // Status icon
       const statusIcon = status === "synced" ? "●" : "○";
       const statusColor = status === "synced" ? "var(--color-green)" : "var(--text-faint)";
       row.createEl("span", { text: statusIcon, cls: "sn-doc-status" }).style.color = statusColor;
 
-      // Title
       row.createEl("span", { text: doc.title, cls: "sn-doc-title" });
 
-      // Category badge
       if (doc.category) {
         const label = this.metadata?.categories.find((c) => c.value === doc.category)?.label ?? doc.category;
         row.createEl("span", { text: label, cls: "sn-doc-badge" });
       }
 
-      // Date
       if (doc.sys_updated_on) {
         const date = doc.sys_updated_on.split(" ")[0] ?? "";
         row.createEl("span", { text: date, cls: "sn-doc-meta" });
       }
 
-      // Checked out indicator
       if (doc.checked_out_by) {
         row.createEl("span", { text: "🔒", cls: "sn-doc-lock" });
       }
 
-      // Double-click to open locally
       row.addEventListener("dblclick", () => {
         const entry = this.plugin.syncState.docMap[doc.sys_id];
         if (entry) {

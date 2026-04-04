@@ -60,22 +60,18 @@ export class ApiClient {
     }
   }
 
-  /** Get all documents */
   async getDocuments(): Promise<ApiResponse<SNDocument[]>> {
     return this.request<SNDocument[]>("GET", "/documents");
   }
 
-  /** Get a single document by ID */
   async getDocument(id: string): Promise<ApiResponse<SNDocument>> {
     return this.request<SNDocument>("GET", `/documents/${id}`);
   }
 
-  /** Get documents changed since a timestamp */
   async getChanges(since: string): Promise<ApiResponse<SNDocument[]>> {
     return this.request<SNDocument[]>("GET", `/documents/changes?since=${encodeURIComponent(since)}`);
   }
 
-  /** Create a new document */
   async createDocument(doc: {
     title: string;
     content: string;
@@ -86,7 +82,6 @@ export class ApiClient {
     return this.request<SNDocument>("POST", "/documents", doc);
   }
 
-  /** Update an existing document */
   async updateDocument(
     id: string,
     doc: { title?: string; content?: string; category?: string; project?: string; tags?: string }
@@ -94,27 +89,22 @@ export class ApiClient {
     return this.request<SNDocument>("PUT", `/documents/${id}`, doc);
   }
 
-  /** Delete a document */
   async deleteDocument(id: string): Promise<ApiResponse<void>> {
     return this.request<void>("DELETE", `/documents/${id}`);
   }
 
-  /** Check out (lock) a document */
   async checkout(id: string): Promise<ApiResponse<SNDocument>> {
     return this.request<SNDocument>("POST", `/documents/${id}/checkout`);
   }
 
-  /** Check in (unlock) a document */
   async checkin(id: string): Promise<ApiResponse<SNDocument>> {
     return this.request<SNDocument>("POST", `/documents/${id}/checkin`);
   }
 
-  /** Force check in a document (admin override) */
   async forceCheckin(id: string): Promise<ApiResponse<SNDocument>> {
     return this.request<SNDocument>("POST", `/documents/${id}/force-checkin`);
   }
 
-  /** Get available categories, projects, and tags from SN */
   async getMetadata(): Promise<ApiResponse<SNMetadata>> {
     return this.request<SNMetadata>("GET", this.metadataPath);
   }

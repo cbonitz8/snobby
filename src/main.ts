@@ -43,7 +43,6 @@ export default class SNSyncPlugin extends Plugin {
       new Notice("Snobby: Configure your ServiceNow connection in settings.");
     }
 
-    // Initialize modules
     this.authManager = new AuthManager(this);
     this.apiClient = new ApiClient(
       this.authManager,
@@ -65,8 +64,6 @@ export default class SNSyncPlugin extends Plugin {
       this.conflictResolver
     );
 
-    // Register OAuth callback handler from the configured redirect URI
-    // URI format: obsidian://{handler}/callback — extract the handler name
     const redirectUri = this.settings.oauthRedirectUri;
     const handlerMatch = redirectUri.match(/^obsidian:\/\/(.+)/);
     if (handlerMatch) {
@@ -77,16 +74,13 @@ export default class SNSyncPlugin extends Plugin {
       });
     }
 
-    // Status bar
     this.statusBarEl = this.addStatusBarItem();
     this.updateStatusBar("idle");
 
-    // Click status bar to trigger manual sync
     this.statusBarEl.addEventListener("click", () => {
       this.syncEngine.sync();
     });
 
-    // Commands
     this.addCommand({
       id: "sync-now",
       name: "Sync now",
@@ -111,10 +105,8 @@ export default class SNSyncPlugin extends Plugin {
       callback: () => this.syncEngine.bulkUpdate(),
     });
 
-    // Settings tab
     this.addSettingTab(new SNSyncSettingTab(this.app, this));
 
-    // Snobby Browser view
     this.registerView(
       VIEW_TYPE_SN_BROWSER,
       (leaf) => new SNBrowserView(leaf, this)
@@ -134,7 +126,6 @@ export default class SNSyncPlugin extends Plugin {
       },
     });
 
-    // Start file watcher and sync engine
     this.fileWatcher.start();
     this.syncEngine.start();
   }
@@ -198,7 +189,6 @@ export default class SNSyncPlugin extends Plugin {
     }
   }
 
-  /** Update the pending count (called by sync engine) */
   setPendingCount(count: number) {
     this.pendingCount = count;
   }

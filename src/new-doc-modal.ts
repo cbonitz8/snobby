@@ -95,7 +95,6 @@ export class NewDocModal extends Modal {
   }
 }
 
-/** Show the new doc modal and return the result as a promise */
 export function promptNewDocMetadata(
   app: App,
   metadata: SNMetadata,
