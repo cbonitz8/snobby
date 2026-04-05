@@ -19,12 +19,23 @@ export interface DocMapEntry {
   sysId: string;
   path: string;
   lastServerTimestamp: string;
+  lockedBy: string;
+  lockedAt: string;
+}
+
+export interface ConflictEntry {
+  sysId: string;
+  path: string;
+  remoteContent: string;
+  remoteTimestamp: string;
+  lockedBy: string;
 }
 
 export interface SyncState {
   lastSyncTimestamp: string;
   ignoredIds: string[];
   docMap: Record<string, DocMapEntry>;
+  conflicts: Record<string, ConflictEntry>;
 }
 
 export interface SNFrontmatter {
@@ -72,6 +83,7 @@ export interface SNSyncSettings {
   remoteDeleteBehavior: RemoteDeleteBehavior;
   folderMapping: FolderMapping;
   excludePaths: string[];
+  username: string;
 }
 
 export interface PluginData {

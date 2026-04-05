@@ -13,6 +13,7 @@ const DEFAULT_SYNC_STATE: SyncState = {
   lastSyncTimestamp: "",
   ignoredIds: [],
   docMap: {},
+  conflicts: {},
 };
 
 const DEFAULT_AUTH: AuthTokens = {
@@ -29,9 +30,9 @@ export default class SNSyncPlugin extends Plugin {
   authTokens!: AuthTokens;
   authManager!: AuthManager;
   apiClient!: ApiClient;
-  private frontmatterManager!: FrontmatterManager;
-  private fileWatcher!: FileWatcher;
-  private conflictResolver!: ConflictResolver;
+  frontmatterManager!: FrontmatterManager;
+  fileWatcher!: FileWatcher;
+  conflictResolver!: ConflictResolver;
   syncEngine!: SyncEngine;
   private statusBarEl: HTMLElement | null = null;
   private pendingCount = 0;
@@ -55,7 +56,7 @@ export default class SNSyncPlugin extends Plugin {
       this.settings.frontmatterPrefix
     );
     this.fileWatcher = new FileWatcher(this, this.frontmatterManager, this.apiClient);
-    this.conflictResolver = new ConflictResolver(this.app, this.frontmatterManager);
+    this.conflictResolver = new ConflictResolver(this);
     this.syncEngine = new SyncEngine(
       this,
       this.apiClient,
@@ -105,6 +106,34 @@ export default class SNSyncPlugin extends Plugin {
       callback: () => this.syncEngine.bulkUpdate(),
     });
 
+    this.addCommand({
+      id: "resolve-pull-remote",
+      name: "Resolve conflict: pull remote",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file) return false;
+        const conflict = this.conflictResolver.getConflictForPath(file.path);
+        if (!conflict) return false;
+        if (checking) return true;
+        this.conflictResolver.resolveWithPull(conflict.sysId);
+        return true;
+      },
+    });
+
+    this.addCommand({
+      id: "resolve-push-local",
+      name: "Resolve conflict: push local",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file) return false;
+        const conflict = this.conflictResolver.getConflictForPath(file.path);
+        if (!conflict) return false;
+        if (checking) return true;
+        this.conflictResolver.resolveWithPush(conflict.sysId);
+        return true;
+      },
+    });
+
     this.addSettingTab(new SNSyncSettingTab(this.app, this));
 
     this.registerView(
@@ -128,6 +157,7 @@ export default class SNSyncPlugin extends Plugin {
 
     this.fileWatcher.start();
     this.syncEngine.start();
+    this.conflictResolver.migrateMarkerFiles();
   }
 
   async onunload() {
@@ -175,7 +205,7 @@ export default class SNSyncPlugin extends Plugin {
         break;
       }
       case "syncing":
-        this.statusBarEl.setText("Snobby: syncing...");
+        this.statusBarEl.setText(`Snobby: syncing...`);
         break;
       case "error":
         this.statusBarEl.setText("Snobby: error");
@@ -191,5 +221,17 @@ export default class SNSyncPlugin extends Plugin {
 
   setPendingCount(count: number) {
     this.pendingCount = count;
+  }
+
+  updateSyncProgress(pulled: number, pushed: number) {
+    if (!this.statusBarEl) return;
+    const parts: string[] = [];
+    if (pulled > 0) parts.push(`${pulled} pulled`);
+    if (pushed > 0) parts.push(`${pushed} pushed`);
+    this.statusBarEl.setText(
+      parts.length > 0
+        ? `Snobby: syncing... (${parts.join(", ")})`
+        : "Snobby: syncing..."
+    );
   }
 }

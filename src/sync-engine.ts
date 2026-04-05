@@ -6,7 +6,6 @@ import type { FileWatcher } from "./file-watcher";
 import type { ConflictResolver } from "./conflict-resolver";
 import type { SNDocument, SNMetadata, SyncResult } from "./types";
 import { resolveFilePath } from "./folder-mapper";
-import { hasConflictMarkers } from "./conflict-resolver";
 import { promptNewDocMetadata } from "./new-doc-modal";
 
 export class SyncEngine {
@@ -18,6 +17,7 @@ export class SyncEngine {
   private intervalId: number | null = null;
   private isSyncing = false;
   private cachedMetadata: SNMetadata | null = null;
+  private warnedLockedIds = new Set<string>();
 
   constructor(
     plugin: SNSyncPlugin,
@@ -71,6 +71,7 @@ export class SyncEngine {
 
     try {
       await this.pull(result);
+      await this.warnLockedDirtyFiles();
       await this.push(result);
       this.plugin.syncState.lastSyncTimestamp = new Date().toISOString();
       await this.plugin.saveSettings();
@@ -78,14 +79,14 @@ export class SyncEngine {
       const msg = e instanceof Error ? e.message : String(e);
       result.errors.push(msg);
       console.error("Snobby: Sync cycle error", e);
+    } finally {
+      this.isSyncing = false;
+      if (result.errors.length > 0) {
+        console.error("Snobby: Sync errors:", result.errors);
+        new Notice(`Snobby errors:\n${result.errors.join("\n")}`);
+      }
+      this.plugin.updateStatusBar(result.errors.length > 0 ? "error" : "idle");
     }
-
-    this.isSyncing = false;
-    if (result.errors.length > 0) {
-      console.error("Snobby: Sync errors:", result.errors);
-      new Notice(`Snobby errors:\n${result.errors.join("\n")}`);
-    }
-    this.plugin.updateStatusBar(result.errors.length > 0 ? "error" : "idle");
     return result;
   }
 
@@ -119,14 +120,14 @@ export class SyncEngine {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       result.errors.push(msg);
+    } finally {
+      this.isSyncing = false;
+      if (result.errors.length > 0) {
+        console.error("Snobby: Initial pull errors:", result.errors);
+        new Notice(`Snobby errors:\n${result.errors.join("\n")}`);
+      }
+      this.plugin.updateStatusBar(result.errors.length > 0 ? "error" : "idle");
     }
-
-    this.isSyncing = false;
-    if (result.errors.length > 0) {
-      console.error("Snobby: Initial pull errors:", result.errors);
-      new Notice(`Snobby errors:\n${result.errors.join("\n")}`);
-    }
-    this.plugin.updateStatusBar(result.errors.length > 0 ? "error" : "idle");
     return result;
   }
 
@@ -184,6 +185,8 @@ export class SyncEngine {
             sysId: newDoc.sys_id,
             path: file.path,
             lastServerTimestamp: newDoc.sys_updated_on,
+            lockedBy: "",
+            lockedAt: "",
           };
 
           result.pushed++;
@@ -201,16 +204,16 @@ export class SyncEngine {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       result.errors.push(msg);
+    } finally {
+      this.isSyncing = false;
+      const summary = `Bulk push complete: ${result.pushed} uploaded, ${result.errors.length} errors`;
+      new Notice(summary);
+      console.log(`Snobby: ${summary}`);
+      if (result.errors.length > 0) {
+        console.error("Snobby: Bulk push errors:", result.errors);
+      }
+      this.plugin.updateStatusBar(result.errors.length > 0 ? "error" : "idle");
     }
-
-    this.isSyncing = false;
-    const summary = `Bulk push complete: ${result.pushed} uploaded, ${result.errors.length} errors`;
-    new Notice(summary);
-    console.log(`Snobby: ${summary}`);
-    if (result.errors.length > 0) {
-      console.error("Snobby: Bulk push errors:", result.errors);
-    }
-    this.plugin.updateStatusBar(result.errors.length > 0 ? "error" : "idle");
     return result;
   }
 
@@ -272,16 +275,16 @@ export class SyncEngine {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       result.errors.push(msg);
+    } finally {
+      this.isSyncing = false;
+      const summary = `Bulk update complete: ${result.pushed} updated, ${result.errors.length} errors`;
+      new Notice(summary);
+      console.log(`Snobby: ${summary}`);
+      if (result.errors.length > 0) {
+        console.error("Snobby: Bulk update errors:", result.errors);
+      }
+      this.plugin.updateStatusBar(result.errors.length > 0 ? "error" : "idle");
     }
-
-    this.isSyncing = false;
-    const summary = `Bulk update complete: ${result.pushed} updated, ${result.errors.length} errors`;
-    new Notice(summary);
-    console.log(`Snobby: ${summary}`);
-    if (result.errors.length > 0) {
-      console.error("Snobby: Bulk update errors:", result.errors);
-    }
-    this.plugin.updateStatusBar(result.errors.length > 0 ? "error" : "idle");
     return result;
   }
 
@@ -301,6 +304,7 @@ export class SyncEngine {
 
       try {
         await this.handlePulledDoc(doc, result);
+        this.plugin.updateSyncProgress(result.pulled, result.pushed);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         result.errors.push(`Pull error for ${doc.title}: ${msg}`);
@@ -308,10 +312,18 @@ export class SyncEngine {
     }
   }
 
+  private updateLockState(entry: { lockedBy: string; lockedAt: string }, doc: SNDocument) {
+    entry.lockedBy = doc.checked_out_by || "";
+    // SN API doesn't expose checked_out_on; sys_updated_on is the best available proxy
+    entry.lockedAt = doc.checked_out_by ? doc.sys_updated_on : "";
+  }
+
   private async handlePulledDoc(doc: SNDocument, result: SyncResult) {
     const mapEntry = this.plugin.syncState.docMap[doc.sys_id];
 
     if (mapEntry) {
+      this.updateLockState(mapEntry, doc);
+
       const file = this.plugin.app.vault.getAbstractFileByPath(mapEntry.path);
       if (!(file instanceof TFile)) {
         await this.createLocalFile(doc);
@@ -328,7 +340,7 @@ export class SyncEngine {
       } else {
         const fm = await this.frontmatterManager.read(file);
         if (fm.synced === false) {
-          await this.conflictResolver.applyConflict(file, doc.content);
+          this.conflictResolver.applyConflict(doc.sys_id, mapEntry.path, doc.content, doc.sys_updated_on, doc.checked_out_by || "");
           result.conflicts++;
         } else {
           this.fileWatcher.addSyncWritePath(file.path);
@@ -350,6 +362,7 @@ export class SyncEngine {
     for (const file of dirtyFiles) {
       try {
         await this.handlePushFile(file, result);
+        this.plugin.updateSyncProgress(result.pulled, result.pushed);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         result.errors.push(`Push error for ${file.name}: ${msg}`);
@@ -357,17 +370,61 @@ export class SyncEngine {
     }
   }
 
+  private isLockedByOther(sysId: string): string | null {
+    const entry = this.plugin.syncState.docMap[sysId];
+    if (!entry?.lockedBy) return null;
+    const username = this.plugin.settings.username;
+    if (username && entry.lockedBy === username) return null;
+    return entry.lockedBy;
+  }
+
+  private async warnLockedDirtyFiles() {
+    this.warnedLockedIds.clear();
+    const username = this.plugin.settings.username;
+    let warned = 0;
+
+    for (const entry of Object.values(this.plugin.syncState.docMap)) {
+      if (warned >= 3) break;
+      if (!entry.lockedBy) continue;
+      if (username && entry.lockedBy === username) continue;
+
+      const file = this.plugin.app.vault.getAbstractFileByPath(entry.path);
+      if (!(file instanceof TFile)) continue;
+
+      const fm = await this.frontmatterManager.read(file);
+      if (fm.synced !== false) continue;
+
+      this.warnedLockedIds.add(entry.sysId);
+      const fileName = entry.path.split("/").pop() ?? entry.path;
+      new Notice(`${fileName} was locked by ${entry.lockedBy}. Your local changes can't sync until the lock is released.`);
+      warned++;
+    }
+  }
+
   private async handlePushFile(file: TFile, result: SyncResult) {
     const fm = await this.frontmatterManager.read(file);
     const content = await this.getFileContent(file);
 
-    if (hasConflictMarkers(content)) return;
+    if (fm.sys_id && this.plugin.syncState.conflicts[fm.sys_id]) return;
+    if (this.conflictResolver.getConflictForPath(file.path)) return;
 
     if (fm.sys_id) {
+      const lockedByOther = this.isLockedByOther(fm.sys_id);
+      if (lockedByOther) {
+        if (!this.warnedLockedIds.has(fm.sys_id)) {
+          new Notice(`Cannot push "${file.basename}": locked by ${lockedByOther}`);
+        }
+        return;
+      }
+
       const checkoutResult = await this.apiClient.checkout(fm.sys_id);
-      if (!checkoutResult.ok && checkoutResult.status === 423) {
-        const lockedBy = (checkoutResult.data as SNDocument | null)?.checked_out_by ?? "another user";
-        new Notice(`Cannot push "${file.basename}": checked out by ${lockedBy}`);
+      if (!checkoutResult.ok) {
+        if (checkoutResult.status === 423) {
+          const lockedBy = (checkoutResult.data as SNDocument | null)?.checked_out_by ?? "another user";
+          new Notice(`Cannot push "${file.basename}": checked out by ${lockedBy}`);
+        } else {
+          result.errors.push(`Checkout failed for ${file.basename}: HTTP ${checkoutResult.status}`);
+        }
         return;
       }
 
@@ -381,24 +438,21 @@ export class SyncEngine {
           const latest = await this.apiClient.getDocument(fm.sys_id);
           if (latest.ok && latest.data) {
             if (latest.data.content === content) {
-              await this.apiClient.checkout(fm.sys_id);
-              const retryResult = await this.apiClient.updateDocument(fm.sys_id, {
-                content,
-                title: file.basename,
-              });
-              if (retryResult.ok) {
-                await this.apiClient.checkin(fm.sys_id);
-                this.fileWatcher.addSyncWritePath(file.path);
-                await this.frontmatterManager.markSynced(file);
-                this.fileWatcher.removeSyncWritePath(file.path);
-                result.pushed++;
-              }
+              await this.apiClient.checkin(fm.sys_id);
+              this.fileWatcher.addSyncWritePath(file.path);
+              await this.frontmatterManager.markSynced(file);
+              this.fileWatcher.removeSyncWritePath(file.path);
+              result.pushed++;
             } else {
-              await this.conflictResolver.applyConflict(file, latest.data.content);
+              await this.apiClient.checkin(fm.sys_id);
+              this.conflictResolver.applyConflict(fm.sys_id, file.path, latest.data.content, latest.data.sys_updated_on, latest.data.checked_out_by || "");
               result.conflicts++;
             }
+          } else {
+            await this.apiClient.checkin(fm.sys_id);
           }
         } else {
+          await this.apiClient.checkin(fm.sys_id);
           result.errors.push(`Update failed for ${file.basename}: HTTP ${updateResult.status}`);
         }
         return;
@@ -411,10 +465,15 @@ export class SyncEngine {
       this.fileWatcher.removeSyncWritePath(file.path);
 
       const entry = this.plugin.syncState.docMap[fm.sys_id];
-      if (entry && updateResult.data) {
-        entry.lastServerTimestamp = updateResult.data.sys_updated_on;
+      if (entry) {
+        if (updateResult.data) {
+          entry.lastServerTimestamp = updateResult.data.sys_updated_on;
+        }
+        entry.lockedBy = "";
+        entry.lockedAt = "";
       }
 
+      new Notice(`Unlocked "${file.basename}" on ServiceNow`);
       result.pushed++;
     } else {
       let category = fm.category ?? "";
@@ -471,6 +530,8 @@ export class SyncEngine {
         sysId: newDoc.sys_id,
         path: file.path,
         lastServerTimestamp: newDoc.sys_updated_on,
+        lockedBy: "",
+        lockedAt: "",
       };
 
       result.pushed++;
@@ -523,6 +584,8 @@ export class SyncEngine {
       sysId: doc.sys_id,
       path: finalPath,
       lastServerTimestamp: doc.sys_updated_on,
+      lockedBy: doc.checked_out_by || "",
+      lockedAt: doc.checked_out_by ? doc.sys_updated_on : "",
     };
   }
 
@@ -539,12 +602,17 @@ export class SyncEngine {
   }
 
   async resolveCollision(path: string, sysId: string): Promise<string> {
-    const existing = this.plugin.app.vault.getAbstractFileByPath(path);
-    if (!existing) return path;
+    if (!this.plugin.app.vault.getAbstractFileByPath(path)) return path;
 
     const ext = ".md";
     const base = path.slice(0, -ext.length);
-    return `${base} (${sysId.slice(0, 6)})${ext}`;
+    let candidate = `${base} (${sysId.slice(0, 6)})${ext}`;
+    let counter = 2;
+    while (this.plugin.app.vault.getAbstractFileByPath(candidate)) {
+      candidate = `${base} (${sysId.slice(0, 6)}-${counter})${ext}`;
+      counter++;
+    }
+    return candidate;
   }
 
   private async getFileContent(file: TFile): Promise<string> {
