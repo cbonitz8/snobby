@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, Notice, Menu } from "obsidian";
+import { ItemView, WorkspaceLeaf, Notice, Menu, TFile } from "obsidian";
 import type SNSyncPlugin from "./main";
 import type { SNDocument, SNMetadata } from "./types";
 
@@ -75,7 +75,7 @@ export class SNBrowserView extends ItemView {
   }
 
   private async fetchData() {
-    if (this.serverDocs.length > 0) return; // use cache
+    if (this.isLoading || this.serverDocs.length > 0) return;
     this.isLoading = true;
 
     const [docsResponse, metaResponse] = await Promise.all([
@@ -116,6 +116,8 @@ export class SNBrowserView extends ItemView {
         sysId,
         path: file.path,
         lastServerTimestamp: "",
+        lockedBy: "",
+        lockedAt: "",
       };
       trackedIds.add(sysId);
       added++;
@@ -448,7 +450,7 @@ export class SNBrowserView extends ItemView {
         if (entry) {
           const file = this.plugin.app.vault.getAbstractFileByPath(entry.path);
           if (file) {
-            this.plugin.app.workspace.getLeaf(false).openFile(file as any);
+            this.plugin.app.workspace.getLeaf(false).openFile(file as TFile);
           }
         }
       });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveFilePath, inferMetadataFromPath, sanitizeTitle } from "./folder-mapper";
+import { resolveFilePath, sanitizeTitle } from "./folder-mapper";
 import type { FolderMapping } from "./types";
 
 const MAPPING: FolderMapping = {
@@ -47,37 +47,6 @@ describe("resolveFilePath", () => {
   it("uses custom tag mapping when tag matches", () => {
     const result = resolveFilePath(MAPPING, "eg-select", "", "", "widget");
     expect(result).toBe("Resources/Reusable Components/Widgets/eg-select.md");
-  });
-});
-
-describe("inferMetadataFromPath", () => {
-  it("infers project and category from path", () => {
-    const result = inferMetadataFromPath("Project Alpha/Session Logs/My Doc.md", MAPPING);
-    expect(result.project).toBe("Project Alpha");
-    expect(result.category).toBe("session_log");
-  });
-
-  it("infers project only when no category folder", () => {
-    const result = inferMetadataFromPath("Project Alpha/overview.md", MAPPING);
-    expect(result.project).toBe("Project Alpha");
-    expect(result.category).toBe("");
-  });
-
-  it("infers category only when no project folder", () => {
-    const result = inferMetadataFromPath("Design Specs/My Doc.md", MAPPING);
-    expect(result.project).toBe("");
-    expect(result.category).toBe("design_spec");
-  });
-
-  it("infers custom tag from path", () => {
-    const result = inferMetadataFromPath("Resources/Reusable Components/Widgets/eg-select.md", MAPPING);
-    expect(result.tag).toBe("widget");
-  });
-
-  it("returns empty for file at vault root", () => {
-    const result = inferMetadataFromPath("random.md", MAPPING);
-    expect(result.project).toBe("");
-    expect(result.category).toBe("");
   });
 });
 

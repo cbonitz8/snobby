@@ -1,4 +1,4 @@
-import { TFile } from "obsidian";
+import { TFile, Notice } from "obsidian";
 import type SNSyncPlugin from "./main";
 import type { FrontmatterManager } from "./frontmatter-manager";
 import type { ApiClient } from "./api-client";
@@ -83,8 +83,18 @@ export class FileWatcher {
     await this.frontmatterManager.markDirty(file);
 
     if (this.plugin.settings.checkoutOnEdit && fm.sys_id) {
+      const entry = this.plugin.syncState.docMap[fm.sys_id];
+      const username = this.plugin.settings.username;
+      if (entry?.lockedBy && (!username || entry.lockedBy !== username)) {
+        new Notice(`"${file.basename}" is locked by ${entry.lockedBy}. Your edits won't sync until the lock is released.`);
+        return;
+      }
+
       try {
-        await this.apiClient.checkout(fm.sys_id);
+        const result = await this.apiClient.checkout(fm.sys_id);
+        if (result.ok) {
+          new Notice(`Locked "${file.basename}" on ServiceNow`);
+        }
       } catch (e) {
         console.error("Snobby: Auto-checkout failed", e);
       }
