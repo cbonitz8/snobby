@@ -17,6 +17,7 @@ export class SyncEngine {
   private intervalId: number | null = null;
   private isSyncing = false;
   private cachedMetadata: SNMetadata | null = null;
+  private warnedLockedIds = new Set<string>();
 
   constructor(
     plugin: SNSyncPlugin,
@@ -78,14 +79,14 @@ export class SyncEngine {
       const msg = e instanceof Error ? e.message : String(e);
       result.errors.push(msg);
       console.error("Snobby: Sync cycle error", e);
+    } finally {
+      this.isSyncing = false;
+      if (result.errors.length > 0) {
+        console.error("Snobby: Sync errors:", result.errors);
+        new Notice(`Snobby errors:\n${result.errors.join("\n")}`);
+      }
+      this.plugin.updateStatusBar(result.errors.length > 0 ? "error" : "idle");
     }
-
-    this.isSyncing = false;
-    if (result.errors.length > 0) {
-      console.error("Snobby: Sync errors:", result.errors);
-      new Notice(`Snobby errors:\n${result.errors.join("\n")}`);
-    }
-    this.plugin.updateStatusBar(result.errors.length > 0 ? "error" : "idle");
     return result;
   }
 
@@ -313,6 +314,7 @@ export class SyncEngine {
 
   private updateLockState(entry: { lockedBy: string; lockedAt: string }, doc: SNDocument) {
     entry.lockedBy = doc.checked_out_by || "";
+    // SN API doesn't expose checked_out_on; sys_updated_on is the best available proxy
     entry.lockedAt = doc.checked_out_by ? doc.sys_updated_on : "";
   }
 
@@ -377,6 +379,7 @@ export class SyncEngine {
   }
 
   private async warnLockedDirtyFiles() {
+    this.warnedLockedIds.clear();
     const username = this.plugin.settings.username;
     let warned = 0;
 
@@ -391,6 +394,7 @@ export class SyncEngine {
       const fm = await this.frontmatterManager.read(file);
       if (fm.synced !== false) continue;
 
+      this.warnedLockedIds.add(entry.sysId);
       const fileName = entry.path.split("/").pop() ?? entry.path;
       new Notice(`${fileName} was locked by ${entry.lockedBy}. Your local changes can't sync until the lock is released.`);
       warned++;
@@ -402,11 +406,14 @@ export class SyncEngine {
     const content = await this.getFileContent(file);
 
     if (fm.sys_id && this.plugin.syncState.conflicts[fm.sys_id]) return;
+    if (this.conflictResolver.getConflictForPath(file.path)) return;
 
     if (fm.sys_id) {
       const lockedByOther = this.isLockedByOther(fm.sys_id);
       if (lockedByOther) {
-        new Notice(`Cannot push "${file.basename}": locked by ${lockedByOther}`);
+        if (!this.warnedLockedIds.has(fm.sys_id)) {
+          new Notice(`Cannot push "${file.basename}": locked by ${lockedByOther}`);
+        }
         return;
       }
 
@@ -437,11 +444,15 @@ export class SyncEngine {
               this.fileWatcher.removeSyncWritePath(file.path);
               result.pushed++;
             } else {
+              await this.apiClient.checkin(fm.sys_id);
               this.conflictResolver.applyConflict(fm.sys_id, file.path, latest.data.content, latest.data.sys_updated_on, latest.data.checked_out_by || "");
               result.conflicts++;
             }
+          } else {
+            await this.apiClient.checkin(fm.sys_id);
           }
         } else {
+          await this.apiClient.checkin(fm.sys_id);
           result.errors.push(`Update failed for ${file.basename}: HTTP ${updateResult.status}`);
         }
         return;

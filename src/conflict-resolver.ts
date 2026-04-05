@@ -14,15 +14,21 @@ export function stripConflictMarkers(content: string): string {
   const startIdx = content.indexOf(MARKER_LOCAL);
   if (startIdx === -1) return content;
 
-  const sepIdx = content.indexOf(MARKER_SEPARATOR, startIdx);
   const endIdx = content.indexOf(MARKER_REMOTE, startIdx);
-  if (sepIdx === -1 || endIdx === -1) return content;
+  if (endIdx === -1) return content;
 
-  const localPortion = content.substring(startIdx + MARKER_LOCAL.length + 1, sepIdx).trimEnd();
-  const before = content.substring(0, startIdx).trimEnd();
-  const after = content.substring(endIdx + MARKER_REMOTE.length).trimStart();
+  // Find the separator between the local and remote markers (not an unrelated one)
+  const blockContent = content.substring(startIdx, endIdx);
+  const sepRelative = blockContent.lastIndexOf(MARKER_SEPARATOR);
+  if (sepRelative === -1) return content;
+  const sepIdx = startIdx + sepRelative;
 
-  return [before, localPortion, after].filter((s) => s.length > 0).join("\n");
+  const localPortion = content.substring(startIdx + MARKER_LOCAL.length + 1, sepIdx);
+  // Strip exactly one trailing/leading newline at the boundaries (not all whitespace)
+  const before = content.substring(0, startIdx).replace(/\n$/, "");
+  const after = content.substring(endIdx + MARKER_REMOTE.length).replace(/^\n/, "");
+
+  return [before, localPortion.replace(/\n$/, ""), after].filter((s) => s.length > 0).join("\n");
 }
 
 export class ConflictResolver {
@@ -63,9 +69,14 @@ export class ConflictResolver {
     const tFile = file as TFile;
     this.plugin.fileWatcher.addSyncWritePath(conflict.path);
     await this.plugin.app.vault.modify(tFile, conflict.remoteContent);
+    await this.plugin.frontmatterManager.markSynced(tFile);
     this.plugin.fileWatcher.removeSyncWritePath(conflict.path);
 
-    await this.plugin.frontmatterManager.markSynced(tFile);
+    try {
+      await this.plugin.apiClient.checkin(sysId);
+    } catch {
+      // best-effort — lock may not have been held
+    }
 
     const entry = this.plugin.syncState.docMap[sysId];
     if (entry) {
