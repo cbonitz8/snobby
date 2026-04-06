@@ -167,7 +167,7 @@ export default class SNSyncPlugin extends Plugin {
 
     this.addCommand({
       id: "open-sn-browser",
-      name: "Open Snobby Browser",
+      name: "Open Snobby browser",
       callback: () => {
         const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_SN_BROWSER);
         if (existing.length > 0) {
@@ -198,7 +198,6 @@ export default class SNSyncPlugin extends Plugin {
   }
 
   async onunload() {
-    this.app.workspace.detachLeavesOfType(VIEW_TYPE_SN_BROWSER);
     this.syncEngine.stop();
   }
 

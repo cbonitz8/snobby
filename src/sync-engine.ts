@@ -177,7 +177,6 @@ export class SyncEngine {
       this.isSyncing = false;
       const summary = `Re-pull complete: ${result.pulled} downloaded, ${result.errors.length} errors`;
       new Notice(summary);
-      console.log(`Snobby: ${summary}`);
       this.plugin.updateStatusBar(result.errors.length > 0 ? "error" : "idle");
     }
     return result;
@@ -203,7 +202,6 @@ export class SyncEngine {
 
       const total = candidates.length;
       new Notice(`Bulk push: ${total} documents to upload`);
-      console.log(`Snobby: Bulk push starting — ${total} files`);
 
       for (let i = 0; i < candidates.length; i++) {
         const file = candidates[i]!;
@@ -260,7 +258,6 @@ export class SyncEngine {
       this.isSyncing = false;
       const summary = `Bulk push complete: ${result.pushed} uploaded, ${result.errors.length} errors`;
       new Notice(summary);
-      console.log(`Snobby: ${summary}`);
       if (result.errors.length > 0) {
         console.error("Snobby: Bulk push errors:", result.errors);
       }
@@ -289,7 +286,6 @@ export class SyncEngine {
 
       const total = candidates.length;
       new Notice(`Bulk update: ${total} documents to re-sync`);
-      console.log(`Snobby: Bulk update starting — ${total} files`);
 
       for (let i = 0; i < candidates.length; i++) {
         const file = candidates[i]!;
@@ -331,7 +327,6 @@ export class SyncEngine {
       this.isSyncing = false;
       const summary = `Bulk update complete: ${result.pushed} updated, ${result.errors.length} errors`;
       new Notice(summary);
-      console.log(`Snobby: ${summary}`);
       if (result.errors.length > 0) {
         console.error("Snobby: Bulk update errors:", result.errors);
       }

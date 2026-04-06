@@ -285,6 +285,14 @@
   flex-shrink: 0;
 }
 
+.sn-doc-status-synced {
+  color: var(--color-green);
+}
+
+.sn-doc-status-unsynced {
+  color: var(--text-faint);
+}
+
 .sn-doc-title {
   flex: 1;
   min-width: 0;

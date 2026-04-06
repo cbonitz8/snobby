@@ -93,7 +93,7 @@ export class SNSyncSettingTab extends PluginSettingTab {
       row.createEl("td", { text: purpose });
     }
 
-    containerEl.createEl("h2", { text: "Connection" });
+    new Setting(containerEl).setName("Connection").setHeading();
 
     new Setting(containerEl)
       .setName("Instance URL")
@@ -197,7 +197,7 @@ export class SNSyncSettingTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl("h2", { text: "ServiceNow Data" });
+    new Setting(containerEl).setName("ServiceNow data").setHeading();
 
     const metadataContainer = containerEl.createDiv();
     metadataContainer.createEl("p", {
@@ -216,7 +216,7 @@ export class SNSyncSettingTab extends PluginSettingTab {
 
           try {
             const response = await this.plugin.fetchMetadata();
-            console.log("Snobby: metadata response", response);
+
 
             if (!response || !response.ok || !response.data) {
               metadataContainer.createEl("p", {
@@ -226,7 +226,7 @@ export class SNSyncSettingTab extends PluginSettingTab {
             }
 
             const meta = response.data;
-            console.log("Snobby: metadata parsed", meta);
+
 
             const catSection = metadataContainer.createDiv({ cls: "sn-metadata-section" });
             catSection.createEl("h4", { text: "Categories" });
@@ -269,7 +269,7 @@ export class SNSyncSettingTab extends PluginSettingTab {
         })
       );
 
-    containerEl.createEl("h2", { text: "Sync" });
+    new Setting(containerEl).setName("Sync").setHeading();
 
     new Setting(containerEl)
       .setName("Sync mode")
@@ -301,7 +301,7 @@ export class SNSyncSettingTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl("h2", { text: "Behavior" });
+    new Setting(containerEl).setName("Behavior").setHeading();
 
     new Setting(containerEl)
       .setName("Checkout on edit")
@@ -344,7 +344,7 @@ export class SNSyncSettingTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl("h2", { text: "Advanced" });
+    new Setting(containerEl).setName("Advanced").setHeading();
 
     new Setting(containerEl)
       .setName("Frontmatter prefix")

@@ -1,9 +1,9 @@
 {
-  "id": "sn-obsidian-sync",
+  "id": "snobby",
   "name": "Snobby",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "minAppVersion": "1.0.0",
-  "description": "Bidirectional sync between Obsidian and a ServiceNow Scripted REST API",
+  "description": "Bidirectional sync between your vault and a ServiceNow Scripted REST API.",
   "author": "Caleb Bonitz",
   "authorUrl": "https://github.com/cbonitz8/sn-obsidian-sync",
   "isDesktopOnly": true

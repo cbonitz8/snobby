@@ -127,7 +127,7 @@ export class SNBrowserView extends ItemView {
 
     if (added > 0) {
       await this.plugin.saveSettings();
-      console.log(`Snobby Browser: Reconciled ${added} files into docMap`);
+
     }
   }
 
@@ -161,6 +161,12 @@ export class SNBrowserView extends ItemView {
       line.appendText(` has ${files.length} file${files.length > 1 ? "s" : ""} checked out: `);
       line.createEl("span", { text: files.join(", "), cls: "sn-lock-banner-files" });
     }
+  }
+
+  private createStatCard(container: HTMLElement, value: string, label: string, warning = false) {
+    const card = container.createDiv({ cls: "sn-stat" });
+    card.createEl("span", { text: value, cls: `sn-stat-value${warning ? " sn-stat-warning" : ""}` });
+    card.createEl("span", { text: label, cls: "sn-stat-label" });
   }
 
   private getDocStatus(doc: SNDocument): string {
@@ -205,7 +211,7 @@ export class SNBrowserView extends ItemView {
     const filterBar = container.createDiv({ cls: "sn-filter-bar" });
 
     const projectSelect = filterBar.createEl("select", { cls: "sn-filter-select" });
-    projectSelect.createEl("option", { text: "All Projects", value: "" });
+    projectSelect.createEl("option", { text: "All projects", value: "" });
     if (this.metadata) {
       for (const proj of this.metadata.projects) {
         const opt = projectSelect.createEl("option", { text: proj.label, value: proj.value });
@@ -218,7 +224,7 @@ export class SNBrowserView extends ItemView {
     });
 
     const categorySelect = filterBar.createEl("select", { cls: "sn-filter-select" });
-    categorySelect.createEl("option", { text: "All Categories", value: "" });
+    categorySelect.createEl("option", { text: "All categories", value: "" });
     if (this.metadata) {
       for (const cat of this.metadata.categories) {
         const opt = categorySelect.createEl("option", { text: cat.label, value: cat.value });
@@ -231,9 +237,9 @@ export class SNBrowserView extends ItemView {
     });
 
     const statusSelect = filterBar.createEl("select", { cls: "sn-filter-select" });
-    statusSelect.createEl("option", { text: "All Status", value: "" });
+    statusSelect.createEl("option", { text: "All status", value: "" });
     statusSelect.createEl("option", { text: "Synced", value: "synced" });
-    statusSelect.createEl("option", { text: "Not Downloaded", value: "not-downloaded" });
+    statusSelect.createEl("option", { text: "Not downloaded", value: "not-downloaded" });
     statusSelect.value = this.selectedStatus;
     statusSelect.addEventListener("change", () => {
       this.selectedStatus = statusSelect.value;
@@ -273,11 +279,10 @@ export class SNBrowserView extends ItemView {
 
     stats.createEl("h3", { text: "Sync Overview" });
     const statGrid = stats.createDiv({ cls: "sn-stat-grid" });
-    statGrid.createDiv({ cls: "sn-stat" }).innerHTML = `<span class="sn-stat-value">${totalServer}</span><span class="sn-stat-label">On Server</span>`;
-    statGrid.createDiv({ cls: "sn-stat" }).innerHTML = `<span class="sn-stat-value">${totalLocal}</span><span class="sn-stat-label">Downloaded</span>`;
-    statGrid.createDiv({ cls: "sn-stat" }).innerHTML = `<span class="sn-stat-value">${excludeCount}</span><span class="sn-stat-label">Excluded Paths</span>`;
-    const conflictStat = statGrid.createDiv({ cls: "sn-stat" });
-    conflictStat.innerHTML = `<span class="sn-stat-value${conflicts.length > 0 ? " sn-stat-warning" : ""}">${conflicts.length}</span><span class="sn-stat-label">Conflicts</span>`;
+    this.createStatCard(statGrid, String(totalServer), "On server");
+    this.createStatCard(statGrid, String(totalLocal), "Downloaded");
+    this.createStatCard(statGrid, String(excludeCount), "Excluded paths");
+    this.createStatCard(statGrid, String(conflicts.length), "Conflicts", conflicts.length > 0);
 
     const dangerSection = container.createDiv({ cls: "sn-exclude-section" });
     dangerSection.createEl("h3", { text: "Reset & Re-pull" });
@@ -553,8 +558,8 @@ export class SNBrowserView extends ItemView {
       });
 
       const statusIcon = status === "synced" ? "●" : "○";
-      const statusColor = status === "synced" ? "var(--color-green)" : "var(--text-faint)";
-      row.createEl("span", { text: statusIcon, cls: "sn-doc-status" }).style.color = statusColor;
+      const statusCls = status === "synced" ? "sn-doc-status-synced" : "sn-doc-status-unsynced";
+      row.createEl("span", { text: statusIcon, cls: `sn-doc-status ${statusCls}` });
 
       row.createEl("span", { text: doc.title, cls: "sn-doc-title" });
 

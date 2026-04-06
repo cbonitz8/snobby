@@ -4,7 +4,12 @@
 
 Bidirectional sync between an Obsidian vault and a ServiceNow Scripted REST API. Devs write documentation in Obsidian with full markdown support, and the plugin keeps everything in sync with ServiceNow for shared team visibility.
 
-## What It Does
+## Disclosures
+
+- This plugin makes network requests to your configured ServiceNow instance for OAuth 2.0 authentication and REST API calls to sync documents. No other external services are contacted.
+- A ServiceNow account with appropriate permissions is required for this plugin to function.
+
+## What it does
 
 - **Bidirectional sync** — edits in Obsidian push to SN, edits in SN pull to Obsidian
 - **OAuth 2.0 authentication** — each user authenticates individually, SN knows who made each change
