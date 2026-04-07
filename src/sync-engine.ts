@@ -194,7 +194,7 @@ export class SyncEngine {
       const candidates: TFile[] = [];
 
       for (const file of allFiles) {
-        const fm = await this.frontmatterManager.read(file);
+        const fm = this.frontmatterManager.read(file);
         if (fm.category && !fm.sys_id) {
           candidates.push(file);
         }
@@ -206,7 +206,7 @@ export class SyncEngine {
       for (let i = 0; i < candidates.length; i++) {
         const file = candidates[i]!;
         try {
-          const fm = await this.frontmatterManager.read(file);
+          const fm = this.frontmatterManager.read(file);
           const content = await this.getContentForPush(file);
 
           const createResult = await this.apiClient.createDocument({
@@ -278,7 +278,7 @@ export class SyncEngine {
       const candidates: TFile[] = [];
 
       for (const file of allFiles) {
-        const fm = await this.frontmatterManager.read(file);
+        const fm = this.frontmatterManager.read(file);
         if (fm.sys_id) {
           candidates.push(file);
         }
@@ -290,7 +290,7 @@ export class SyncEngine {
       for (let i = 0; i < candidates.length; i++) {
         const file = candidates[i]!;
         try {
-          const fm = await this.frontmatterManager.read(file);
+          const fm = this.frontmatterManager.read(file);
           const content = await this.getContentForPush(file);
 
           const updateResult = await this.apiClient.updateDocument(fm.sys_id!, {
@@ -385,7 +385,7 @@ export class SyncEngine {
       if (!contentChanged) {
         mapEntry.lastServerTimestamp = doc.sys_updated_on;
       } else {
-        const fm = await this.frontmatterManager.read(file);
+        const fm = this.frontmatterManager.read(file);
         if (fm.synced === false) {
           this.conflictResolver.applyConflict(doc.sys_id, mapEntry.path, doc.content, doc.sys_updated_on, doc.checked_out_by || "");
           result.conflicts++;
@@ -445,7 +445,7 @@ export class SyncEngine {
       const file = this.plugin.app.vault.getAbstractFileByPath(entry.path);
       if (!(file instanceof TFile)) continue;
 
-      const fm = await this.frontmatterManager.read(file);
+      const fm = this.frontmatterManager.read(file);
       if (fm.synced !== false) continue;
 
       this.warnedLockedIds.add(entry.sysId);
@@ -456,7 +456,7 @@ export class SyncEngine {
   }
 
   private async handlePushFile(file: TFile, result: SyncResult) {
-    const fm = await this.frontmatterManager.read(file);
+    const fm = this.frontmatterManager.read(file);
     const content = await this.getContentForPush(file);
 
     if (fm.sys_id && this.plugin.syncState.conflicts[fm.sys_id]) return;
@@ -622,7 +622,7 @@ export class SyncEngine {
       resolveFilePath(folderMapping, doc.title, projectLabel, categoryLabel, "")
     );
 
-    const finalPath = await this.resolveCollision(filePath, doc.sys_id);
+    const finalPath = this.resolveCollision(filePath, doc.sys_id);
 
     const parentDir = finalPath.substring(0, finalPath.lastIndexOf("/"));
     if (parentDir) {

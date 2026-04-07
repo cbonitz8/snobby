@@ -66,7 +66,7 @@ export class ConflictResolver {
       return;
     }
 
-    const fm = await this.plugin.frontmatterManager.read(file);
+    const fm = this.plugin.frontmatterManager.read(file);
     this.plugin.fileWatcher.addSyncWritePath(conflict.path);
     await this.plugin.app.vault.modify(file, conflict.remoteContent);
     await this.plugin.frontmatterManager.write(file, {

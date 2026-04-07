@@ -171,7 +171,7 @@ export default class SNSyncPlugin extends Plugin {
       callback: () => {
         const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_SN_BROWSER);
         if (existing.length > 0) {
-          this.app.workspace.revealLeaf(existing[0]!);
+          void this.app.workspace.revealLeaf(existing[0]!);
         } else {
           const leaf = this.app.workspace.getLeaf("tab");
           void leaf.setViewState({ type: VIEW_TYPE_SN_BROWSER, active: true });

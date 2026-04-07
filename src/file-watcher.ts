@@ -76,7 +76,7 @@ export class FileWatcher {
   }
 
   private async handleFileModified(file: TFile) {
-    const fm = await this.frontmatterManager.read(file);
+    const fm = this.frontmatterManager.read(file);
 
     if (fm.synced === false) return;
 
@@ -150,7 +150,7 @@ export class FileWatcher {
 
     for (const file of allFiles) {
       if (this.isExcluded(file.path)) continue;
-      const fm = await this.frontmatterManager.read(file);
+      const fm = this.frontmatterManager.read(file);
       if (fm.synced === false) {
         dirtyFiles.push(file);
       }

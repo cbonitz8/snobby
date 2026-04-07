@@ -303,13 +303,15 @@ export class SNBrowserView extends ItemView {
       const modal = new ConfirmModal(
         this.plugin.app,
         `This will delete ${count} local synced file${count > 1 ? "s" : ""} and re-download them from ServiceNow using the current folder mapping.\n\nLocal-only files (not yet pushed) will NOT be affected.`,
-        async () => {
-          repullBtn.setText("Deleting & re-pulling...");
-          repullBtn.setAttr("disabled", "true");
-          await this.plugin.syncEngine.deleteAllAndRepull();
-          this.serverDocs = [];
-          this.metadata = null;
-          await this.render();
+        () => {
+          void (async () => {
+            repullBtn.setText("Deleting & re-pulling...");
+            repullBtn.setAttr("disabled", "true");
+            await this.plugin.syncEngine.deleteAllAndRepull();
+            this.serverDocs = [];
+            this.metadata = null;
+            await this.render();
+          })();
         }
       );
       modal.open();
@@ -323,18 +325,22 @@ export class SNBrowserView extends ItemView {
     } else {
       const conflictActions = conflictSection.createDiv({ cls: "sn-conflict-actions" });
       const clearStaleBtn = conflictActions.createEl("button", { text: "Clear stale conflicts", cls: "sn-action-btn" });
-      clearStaleBtn.addEventListener("click", async () => {
-        const cleared = await this.plugin.conflictResolver.clearStaleConflicts();
-        new Notice(cleared > 0
-          ? `Cleared ${cleared} stale conflict${cleared > 1 ? "s" : ""}`
-          : "No stale conflicts found");
-        await this.render();
+      clearStaleBtn.addEventListener("click", () => {
+        void (async () => {
+          const cleared = await this.plugin.conflictResolver.clearStaleConflicts();
+          new Notice(cleared > 0
+            ? `Cleared ${cleared} stale conflict${cleared > 1 ? "s" : ""}`
+            : "No stale conflicts found");
+          await this.render();
+        })();
       });
       const dismissAllBtn = conflictActions.createEl("button", { text: "Dismiss all", cls: "sn-action-btn sn-action-btn-danger" });
-      dismissAllBtn.addEventListener("click", async () => {
-        await this.plugin.conflictResolver.clearAllConflicts();
-        new Notice("All conflicts dismissed");
-        await this.render();
+      dismissAllBtn.addEventListener("click", () => {
+        void (async () => {
+          await this.plugin.conflictResolver.clearAllConflicts();
+          new Notice("All conflicts dismissed");
+          await this.render();
+        })();
       });
 
       const conflictList = conflictSection.createDiv({ cls: "sn-conflict-list" });
@@ -361,14 +367,18 @@ export class SNBrowserView extends ItemView {
           }
         });
         const pullBtn = actions.createEl("button", { text: "Pull remote", cls: "sn-action-btn mod-cta" });
-        pullBtn.addEventListener("click", async () => {
-          await this.plugin.conflictResolver.resolveWithPull(conflict.sysId);
-          await this.render();
+        pullBtn.addEventListener("click", () => {
+          void (async () => {
+            await this.plugin.conflictResolver.resolveWithPull(conflict.sysId);
+            await this.render();
+          })();
         });
         const pushBtn = actions.createEl("button", { text: "Push local", cls: "sn-action-btn" });
-        pushBtn.addEventListener("click", async () => {
-          await this.plugin.conflictResolver.resolveWithPush(conflict.sysId);
-          await this.render();
+        pushBtn.addEventListener("click", () => {
+          void (async () => {
+            await this.plugin.conflictResolver.resolveWithPush(conflict.sysId);
+            await this.render();
+          })();
         });
       }
     }
@@ -387,15 +397,17 @@ export class SNBrowserView extends ItemView {
       cls: "sn-exclude-input",
     });
     const addBtn = addRow.createEl("button", { text: "Add", cls: "sn-action-btn mod-cta" });
-    addBtn.addEventListener("click", async () => {
-      const value = addInput.value.trim();
-      if (!value) return;
-      if (!this.plugin.settings.excludePaths.includes(value)) {
-        this.plugin.settings.excludePaths.push(value);
-        await this.plugin.saveSettings();
-      }
-      addInput.value = "";
-      await this.render();
+    addBtn.addEventListener("click", () => {
+      void (async () => {
+        const value = addInput.value.trim();
+        if (!value) return;
+        if (!this.plugin.settings.excludePaths.includes(value)) {
+          this.plugin.settings.excludePaths.push(value);
+          await this.plugin.saveSettings();
+        }
+        addInput.value = "";
+        await this.render();
+      })();
     });
 
     const list = excludeSection.createDiv({ cls: "sn-exclude-list" });
@@ -406,10 +418,12 @@ export class SNBrowserView extends ItemView {
         const row = list.createDiv({ cls: "sn-exclude-row" });
         row.createEl("span", { text: path, cls: "sn-exclude-path" });
         const removeBtn = row.createEl("button", { text: "✕", cls: "sn-exclude-remove" });
-        removeBtn.addEventListener("click", async () => {
-          this.plugin.settings.excludePaths = this.plugin.settings.excludePaths.filter((p) => p !== path);
-          await this.plugin.saveSettings();
-          await this.render();
+        removeBtn.addEventListener("click", () => {
+          void (async () => {
+            this.plugin.settings.excludePaths = this.plugin.settings.excludePaths.filter((p) => p !== path);
+            await this.plugin.saveSettings();
+            await this.render();
+          })();
         });
       }
     }
