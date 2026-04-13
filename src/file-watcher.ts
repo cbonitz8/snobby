@@ -144,7 +144,7 @@ export class FileWatcher {
     }
   }
 
-  async getDirtyFiles(): Promise<TFile[]> {
+  getDirtyFiles(): TFile[] {
     const allFiles = this.plugin.app.vault.getMarkdownFiles();
     const dirtyFiles: TFile[] = [];
 

@@ -71,7 +71,7 @@ export class SyncEngine {
 
     try {
       await this.pull(result);
-      await this.warnLockedDirtyFiles();
+      this.warnLockedDirtyFiles();
       await this.push(result);
       this.plugin.syncState.lastSyncTimestamp = new Date().toISOString();
       await this.plugin.saveSettings();
@@ -411,7 +411,7 @@ export class SyncEngine {
   }
 
   private async push(result: SyncResult) {
-    const dirtyFiles = await this.fileWatcher.getDirtyFiles();
+    const dirtyFiles = this.fileWatcher.getDirtyFiles();
 
     for (const file of dirtyFiles) {
       try {
@@ -432,7 +432,7 @@ export class SyncEngine {
     return entry.lockedBy;
   }
 
-  private async warnLockedDirtyFiles() {
+  private warnLockedDirtyFiles() {
     this.warnedLockedIds.clear();
     const username = this.plugin.settings.username;
     let warned = 0;
