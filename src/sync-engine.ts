@@ -216,11 +216,12 @@ export class SyncEngine {
           const fm = this.frontmatterManager.read(file);
           const content = await this.getContentForPush(file);
 
+          await this.ensureMetadata();
           const createResult = await this.apiClient.createDocument({
             title: file.basename,
             content,
-            category: fm.category ?? "",
-            project: fm.project ?? "",
+            category: this.resolveValue("categories", fm.category ?? ""),
+            project: this.resolveValue("projects", fm.project ?? ""),
             tags: fm.tags ?? "",
           });
 
@@ -596,11 +597,12 @@ export class SyncEngine {
         tags = userInput.tags;
       }
 
+      await this.ensureMetadata();
       const createResult = await this.apiClient.createDocument({
         title: file.basename,
         content,
-        category,
-        project,
+        category: this.resolveValue("categories", category),
+        project: this.resolveValue("projects", project),
         tags,
       });
 
@@ -639,6 +641,16 @@ export class SyncEngine {
     return entry?.label ?? value;
   }
 
+  private resolveValue(type: "projects" | "categories", input: string): string {
+    if (!this.cachedMetadata || !input) return input;
+    const byValue = this.cachedMetadata[type].find((e) => e.value === input);
+    if (byValue) return input;
+    const byLabel = this.cachedMetadata[type].find(
+      (e) => e.label.toLowerCase() === input.toLowerCase()
+    );
+    return byLabel?.value ?? input;
+  }
+
   async ensureMetadata() {
     if (this.cachedMetadata) return;
     const response = await this.apiClient.getMetadata();
@@ -658,7 +670,7 @@ export class SyncEngine {
 
     await this.ensureMetadata();
     const projectLabel = this.resolveLabel("projects", doc.project);
-    const categoryLabel = doc.category;
+    const categoryLabel = this.resolveLabel("categories", doc.category);
 
     const filePath = normalizePath(
       resolveFilePath(folderMapping, doc.title, projectLabel, categoryLabel, "")
