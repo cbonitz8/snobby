@@ -435,10 +435,10 @@ export class SNBrowserView extends ItemView {
 
     const tree = new Map<string, Map<string, SNDocument[]>>();
     for (const doc of docs) {
-      const proj = doc.project || "(No Project)";
+      const proj = doc.project || "";
       if (!tree.has(proj)) tree.set(proj, new Map());
       const projMap = tree.get(proj)!;
-      const cat = doc.category || "(Uncategorized)";
+      const cat = doc.category || "";
       if (!projMap.has(cat)) projMap.set(cat, []);
       projMap.get(cat)!.push(doc);
     }
@@ -461,8 +461,9 @@ export class SNBrowserView extends ItemView {
         text: isExpanded ? "▼" : "▶",
         cls: "sn-tree-arrow",
       });
+      const projDisplay = this.resolveTreeLabel("projects", project) || "(No Project)";
       projHeader.createEl("span", {
-        text: `${project} (${projCount})`,
+        text: `${projDisplay} (${projCount})`,
         cls: `sn-tree-label ${this.selectedTreeNode === projKey ? "is-active" : ""}`,
       });
 
@@ -480,7 +481,8 @@ export class SNBrowserView extends ItemView {
         e.preventDefault();
         const menu = new Menu();
         menu.addItem((item) => {
-          item.setTitle(`Exclude "${project}" from sync`);
+          const projMenuLabel = this.resolveTreeLabel("projects", project) || project;
+          item.setTitle(`Exclude "${projMenuLabel}" from sync`);
           item.onClick(async () => {
             const pattern = `${project}/`;
             if (!this.plugin.settings.excludePaths.includes(pattern)) {
@@ -500,7 +502,8 @@ export class SNBrowserView extends ItemView {
           const catNode = catContainer.createDiv({
             cls: `sn-tree-node sn-tree-category ${this.selectedTreeNode === catKey ? "is-active" : ""}`,
           });
-          catNode.createEl("span", { text: `${category} (${catDocs.length})` });
+          const catDisplay = this.resolveTreeLabel("categories", category) || "(Uncategorized)";
+          catNode.createEl("span", { text: `${catDisplay} (${catDocs.length})` });
           catNode.addEventListener("click", (e) => {
             e.stopPropagation();
             this.selectedTreeNode = catKey;
@@ -520,14 +523,20 @@ export class SNBrowserView extends ItemView {
     const categoryMatch = parts[1]?.replace("category:", "") ?? "";
 
     return docs.filter((doc) => {
-      const proj = doc.project || "(No Project)";
+      const proj = doc.project || "";
       if (proj !== projectMatch) return false;
       if (categoryMatch) {
-        const cat = doc.category || "(Uncategorized)";
+        const cat = doc.category || "";
         if (cat !== categoryMatch) return false;
       }
       return true;
     });
+  }
+
+  private resolveTreeLabel(type: "projects" | "categories", value: string): string {
+    if (!this.metadata || !value) return value;
+    const entry = this.metadata[type].find((e) => e.value === value);
+    return entry?.label ?? value;
   }
 
   private renderDocList(container: HTMLElement) {
