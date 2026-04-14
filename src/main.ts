@@ -45,7 +45,7 @@ export default class SNSyncPlugin extends Plugin {
     await this.loadSettings();
 
     if (!this.settings.instanceUrl || !this.settings.apiPath) {
-      new Notice("Snobby: Configure your ServiceNow connection in settings.");
+      new Notice("Snobby: configure your ServiceNow connection in settings.");
     }
 
     this.authManager = new AuthManager(this);

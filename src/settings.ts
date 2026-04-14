@@ -66,7 +66,7 @@ export class SNSyncSettingTab extends PluginSettingTab {
     const routesEl = details.createDiv({ cls: "sn-routes-reference" });
     new Setting(routesEl).setName("Expected API routes").setHeading();
     routesEl.createEl("p", {
-      text: "Your Scripted REST API must implement these endpoints relative to the API path configured below:",
+      text: "Your scripted REST API must implement these endpoints relative to the API path configured below:",
       cls: "setting-item-description",
     });
     const routeTable = routesEl.createEl("table", { cls: "sn-routes-table" });
@@ -106,7 +106,7 @@ export class SNSyncSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.instanceUrl)
           .onChange(async (value) => {
             if (value && !value.startsWith("https://")) {
-              new Notice("Warning: Instance URL should use HTTPS to protect credentials.");
+              new Notice("Warning: instance URL should use HTTPS to protect credentials.");
             }
             this.plugin.settings.instanceUrl = value;
             await this.plugin.saveSettings();
@@ -156,7 +156,7 @@ export class SNSyncSettingTab extends PluginSettingTab {
       .setName("OAuth client ID")
       .addText((text) =>
         text
-          .setPlaceholder("Client id")
+          .setPlaceholder("Client ID")
           .setValue(this.plugin.settings.oauthClientId)
           .onChange(async (value) => {
             this.plugin.settings.oauthClientId = value;

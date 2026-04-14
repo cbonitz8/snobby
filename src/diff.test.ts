@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeDiff, extractHunks, type DiffLine, type Hunk } from "./diff";
+import { computeDiff, extractHunks, type DiffLine } from "./diff";
 
 describe("computeDiff", () => {
   it("returns empty array for identical content", () => {

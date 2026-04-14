@@ -1,3 +1,4 @@
+/* eslint-disable obsidianmd/hardcoded-config-path */
 import { describe, it, expect, beforeEach } from "vitest";
 import { BaseCache } from "./base-cache";
 
