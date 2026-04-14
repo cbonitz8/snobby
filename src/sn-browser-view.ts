@@ -1,6 +1,8 @@
 import { ItemView, WorkspaceLeaf, Notice, Menu, TFile, Modal, Setting } from "obsidian";
 import type SNSyncPlugin from "./main";
-import type { SNDocument, SNMetadata } from "./types";
+import type { SNDocument, SNMetadata, ConflictEntry } from "./types";
+import { computeDiff, extractHunks } from "./diff";
+import { stripFrontmatter } from "./frontmatter-manager";
 
 export const VIEW_TYPE_SN_BROWSER = "sn-document-browser";
 
@@ -17,6 +19,8 @@ export class SNBrowserView extends ItemView {
   private selectedDocIds: Set<string> = new Set();
   private selectedTreeNode: string = "";
   private expandedNodes: Set<string> = new Set();
+  private expandedConflictId: string | null = null;
+  private showDiffForConflict: string | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: SNSyncPlugin) {
     super(leaf);
@@ -346,40 +350,80 @@ export class SNBrowserView extends ItemView {
       const conflictList = conflictSection.createDiv({ cls: "sn-conflict-list" });
       for (const conflict of conflicts) {
         const fileName = conflict.path.split("/").pop() ?? conflict.path;
-        const row = conflictList.createDiv({ cls: "sn-conflict-row" });
+        const isExpanded = this.expandedConflictId === conflict.sysId;
+
+        const row = conflictList.createDiv({ cls: `sn-conflict-row ${isExpanded ? "is-expanded" : ""}` });
+        row.addEventListener("click", () => {
+          this.expandedConflictId = isExpanded ? null : conflict.sysId;
+          if (!isExpanded) this.showDiffForConflict = null;
+          void this.render();
+        });
 
         const info = row.createDiv({ cls: "sn-conflict-info" });
         info.createEl("span", { text: fileName, cls: "sn-conflict-name" });
         const meta = info.createDiv({ cls: "sn-conflict-meta" });
         if (conflict.remoteTimestamp) {
-          meta.createEl("span", { text: `Remote: ${conflict.remoteTimestamp.split(" ")[0]}` });
+          const remoteMtime = new Date(conflict.remoteTimestamp.replace(" ", "T"));
+          const remoteTimeStr = isNaN(remoteMtime.getTime())
+            ? conflict.remoteTimestamp
+            : remoteMtime.toLocaleDateString();
+          meta.createEl("span", { text: `Remote: ${remoteTimeStr}` });
         }
         if (conflict.lockedBy) {
           meta.createEl("span", { text: `Locked by: ${conflict.lockedBy}` });
         }
+        const sc = conflict.sectionConflicts;
+        if (sc && sc.length > 0) {
+          meta.createEl("span", {
+            text: `${sc.length} section conflict${sc.length > 1 ? "s" : ""}`,
+            cls: "sn-conflict-meta-sections",
+          });
+        }
 
         const actions = row.createDiv({ cls: "sn-conflict-row-actions" });
         const openBtn = actions.createEl("button", { text: "Open", cls: "sn-action-btn" });
-        openBtn.addEventListener("click", () => {
+        openBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
           const file = this.plugin.app.vault.getAbstractFileByPath(conflict.path);
           if (file instanceof TFile) {
             void this.plugin.app.workspace.getLeaf(false).openFile(file);
           }
         });
         const pullBtn = actions.createEl("button", { text: "Pull remote", cls: "sn-action-btn mod-cta" });
-        pullBtn.addEventListener("click", () => {
+        pullBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
           void (async () => {
             await this.plugin.conflictResolver.resolveWithPull(conflict.sysId);
+            this.expandedConflictId = null;
+            this.showDiffForConflict = null;
             await this.render();
           })();
         });
         const pushBtn = actions.createEl("button", { text: "Push local", cls: "sn-action-btn" });
-        pushBtn.addEventListener("click", () => {
+        pushBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
           void (async () => {
             await this.plugin.conflictResolver.resolveWithPush(conflict.sysId);
+            this.expandedConflictId = null;
+            this.showDiffForConflict = null;
             await this.render();
           })();
         });
+        const dismissBtn = actions.createEl("button", { text: "Dismiss", cls: "sn-action-btn sn-action-btn-danger" });
+        dismissBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          void (async () => {
+            delete this.plugin.syncState.conflicts[conflict.sysId];
+            await this.plugin.saveSettings();
+            this.expandedConflictId = null;
+            this.showDiffForConflict = null;
+            await this.render();
+          })();
+        });
+
+        if (isExpanded) {
+          this.renderConflictExpanded(conflictList, conflict);
+        }
       }
     }
 
@@ -429,16 +473,87 @@ export class SNBrowserView extends ItemView {
     }
   }
 
+  private renderConflictExpanded(container: HTMLElement, conflict: ConflictEntry) {
+    const expanded = container.createDiv({ cls: "sn-conflict-row-expanded" });
+    expanded.addEventListener("click", (e) => e.stopPropagation());
+
+    // Section conflict detail
+    const sc = conflict.sectionConflicts;
+    if (sc && sc.length > 0) {
+      const sectionInfo = expanded.createDiv({ cls: "sn-conflict-section-summary" });
+      for (const s of sc) {
+        const item = sectionInfo.createDiv({ cls: "sn-conflict-section-item" });
+        item.createEl("strong", { text: s.heading });
+        const preview = item.createDiv({ cls: "sn-conflict-section-preview" });
+        const localPre = preview.createDiv({ cls: "sn-conflict-section-local" });
+        localPre.createEl("span", { text: "Local:", cls: "sn-conflict-section-label" });
+        localPre.createEl("pre", { text: s.localBody.slice(0, 200) + (s.localBody.length > 200 ? "..." : "") });
+        const remotePre = preview.createDiv({ cls: "sn-conflict-section-remote" });
+        remotePre.createEl("span", { text: "Remote:", cls: "sn-conflict-section-label" });
+        remotePre.createEl("pre", { text: s.remoteBody.slice(0, 200) + (s.remoteBody.length > 200 ? "..." : "") });
+      }
+    }
+
+    // Diff toggle
+    const showingDiff = this.showDiffForConflict === conflict.sysId;
+    const diffToggle = expanded.createEl("button", {
+      text: showingDiff ? "Hide diff" : "Show diff",
+      cls: "sn-action-btn sn-conflict-diff-toggle",
+    });
+    diffToggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.showDiffForConflict = showingDiff ? null : conflict.sysId;
+      void this.render();
+    });
+
+    if (showingDiff) {
+      const file = this.plugin.app.vault.getAbstractFileByPath(conflict.path);
+      if (file instanceof TFile) {
+        void (async () => {
+          const rawLocal = await this.plugin.app.vault.read(file);
+          const localBody = stripFrontmatter(rawLocal);
+          const remoteBody = stripFrontmatter(conflict.remoteContent);
+          const diffLines = computeDiff(localBody, remoteBody);
+
+          if (diffLines.length === 0) {
+            expanded.createEl("p", { text: "Contents are identical.", cls: "sn-conflict-empty" });
+            return;
+          }
+
+          const legend = expanded.createDiv({ cls: "sn-diff-legend" });
+          legend.createSpan({ cls: "sn-diff-legend-item sn-diff-legend-local", text: "\u2212 Local" });
+          legend.createSpan({ cls: "sn-diff-legend-item sn-diff-legend-remote", text: "+ Remote" });
+
+          const hunks = extractHunks(diffLines);
+          const diffContainer = expanded.createDiv({ cls: "sn-conflict-inline-diff" });
+
+          for (let i = 0; i < hunks.length; i++) {
+            if (i > 0) {
+              diffContainer.createDiv({ cls: "sn-diff-separator", text: "\u22EF" });
+            }
+            const hunkEl = diffContainer.createDiv({ cls: "sn-diff-hunk" });
+            for (const line of hunks[i]!.lines) {
+              const lineEl = hunkEl.createDiv({ cls: `sn-diff-line sn-diff-${line.type}` });
+              const prefix = line.type === "added" ? "+" : line.type === "removed" ? "\u2212" : " ";
+              lineEl.createSpan({ text: prefix, cls: "sn-diff-prefix" });
+              lineEl.createSpan({ text: line.text });
+            }
+          }
+        })();
+      }
+    }
+  }
+
   private renderTree(container: HTMLElement) {
     const treePane = container.createDiv({ cls: "sn-tree-pane" });
     const docs = this.getFilteredDocs();
 
     const tree = new Map<string, Map<string, SNDocument[]>>();
     for (const doc of docs) {
-      const proj = doc.project || "(No Project)";
+      const proj = doc.project || "";
       if (!tree.has(proj)) tree.set(proj, new Map());
       const projMap = tree.get(proj)!;
-      const cat = doc.category || "(Uncategorized)";
+      const cat = doc.category || "";
       if (!projMap.has(cat)) projMap.set(cat, []);
       projMap.get(cat)!.push(doc);
     }
@@ -461,8 +576,9 @@ export class SNBrowserView extends ItemView {
         text: isExpanded ? "▼" : "▶",
         cls: "sn-tree-arrow",
       });
+      const projDisplay = this.resolveTreeLabel("projects", project) || "(No Project)";
       projHeader.createEl("span", {
-        text: `${project} (${projCount})`,
+        text: `${projDisplay} (${projCount})`,
         cls: `sn-tree-label ${this.selectedTreeNode === projKey ? "is-active" : ""}`,
       });
 
@@ -480,7 +596,8 @@ export class SNBrowserView extends ItemView {
         e.preventDefault();
         const menu = new Menu();
         menu.addItem((item) => {
-          item.setTitle(`Exclude "${project}" from sync`);
+          const projMenuLabel = this.resolveTreeLabel("projects", project) || project;
+          item.setTitle(`Exclude "${projMenuLabel}" from sync`);
           item.onClick(async () => {
             const pattern = `${project}/`;
             if (!this.plugin.settings.excludePaths.includes(pattern)) {
@@ -500,7 +617,8 @@ export class SNBrowserView extends ItemView {
           const catNode = catContainer.createDiv({
             cls: `sn-tree-node sn-tree-category ${this.selectedTreeNode === catKey ? "is-active" : ""}`,
           });
-          catNode.createEl("span", { text: `${category} (${catDocs.length})` });
+          const catDisplay = this.resolveTreeLabel("categories", category) || "(Uncategorized)";
+          catNode.createEl("span", { text: `${catDisplay} (${catDocs.length})` });
           catNode.addEventListener("click", (e) => {
             e.stopPropagation();
             this.selectedTreeNode = catKey;
@@ -520,14 +638,20 @@ export class SNBrowserView extends ItemView {
     const categoryMatch = parts[1]?.replace("category:", "") ?? "";
 
     return docs.filter((doc) => {
-      const proj = doc.project || "(No Project)";
+      const proj = doc.project || "";
       if (proj !== projectMatch) return false;
       if (categoryMatch) {
-        const cat = doc.category || "(Uncategorized)";
+        const cat = doc.category || "";
         if (cat !== categoryMatch) return false;
       }
       return true;
     });
+  }
+
+  private resolveTreeLabel(type: "projects" | "categories", value: string): string {
+    if (!this.metadata || !value) return value;
+    const entry = this.metadata[type].find((e) => e.value === value);
+    return entry?.label ?? value;
   }
 
   private renderDocList(container: HTMLElement) {
