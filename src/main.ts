@@ -1,4 +1,5 @@
 import { Notice, Plugin } from "obsidian";
+import { ConflictModal } from "./conflict-modal";
 import { SNBrowserView, VIEW_TYPE_SN_BROWSER } from "./sn-browser-view";
 import { DEFAULT_SETTINGS, DEFAULT_FOLDER_MAPPING, SNSyncSettingTab } from "./settings";
 import { AuthManager } from "./auth-manager";
@@ -308,8 +309,19 @@ export default class SNSyncPlugin extends Plugin {
     const container = frag.createEl("div", { cls: "sn-conflict-notice" });
     container.createEl("div", { text: "Sync conflict", cls: "sn-conflict-notice-title" });
     container.createEl("div", {
-      text: `"${file.basename}" has conflicting remote changes. Use the command palette to resolve: pull remote or push local.`,
+      text: `"${file.basename}" has conflicting remote changes.`,
       cls: "sn-conflict-notice-body",
+    });
+    const viewBtn = container.createEl("button", {
+      text: "View details",
+      cls: "sn-action-btn sn-conflict-notice-btn",
+    });
+    viewBtn.addEventListener("click", () => {
+      new ConflictModal(this, conflict).open();
+      if (this.activeConflictNotice) {
+        this.activeConflictNotice.hide();
+        this.activeConflictNotice = null;
+      }
     });
 
     this.activeConflictNotice = new Notice(frag, 0);

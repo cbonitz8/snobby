@@ -1,6 +1,7 @@
 import { Notice, TFile } from "obsidian";
 import type SNSyncPlugin from "./main";
 import type { ConflictEntry } from "./types";
+import { ConflictModal } from "./conflict-modal";
 
 const MARKER_LOCAL = "<<<<<<< Local (Obsidian)";
 const MARKER_SEPARATOR = "=======";
@@ -39,20 +40,9 @@ export class ConflictResolver {
   }
 
   applyConflict(sysId: string, path: string, remoteContent: string, remoteTimestamp: string, lockedBy: string) {
-    this.plugin.syncState.conflicts[sysId] = {
-      sysId,
-      path,
-      remoteContent,
-      remoteTimestamp,
-      lockedBy,
-    };
-
-    const fileName = path.split("/").pop() ?? path;
-    if (lockedBy) {
-      new Notice(`"${fileName}" has remote changes by ${lockedBy} (file is locked). Use "Resolve conflict: pull remote" to update.`);
-    } else {
-      new Notice(`"${fileName}" has remote changes. Use command palette to resolve: pull remote or push local.`);
-    }
+    const conflict: ConflictEntry = { sysId, path, remoteContent, remoteTimestamp, lockedBy };
+    this.plugin.syncState.conflicts[sysId] = conflict;
+    new ConflictModal(this.plugin, conflict).open();
   }
 
   async resolveWithPull(sysId: string) {
