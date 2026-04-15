@@ -21,7 +21,7 @@ Six core modules composed by `SNSyncPlugin` in `src/main.ts`:
 | `SyncEngine` | `sync-engine.ts` | Pull/push orchestration, bulk ops, initial pull |
 | `FileWatcher` | `file-watcher.ts` | Vault event monitoring, debounce, dirty flagging |
 | `FrontmatterManager` | `frontmatter-manager.ts` | Read/write SN frontmatter fields via Obsidian API |
-| `ConflictResolver` | `conflict-resolver.ts` | Conflict detection, modal UI, resolution strategies |
+| `ConflictResolver` | `conflict-resolver.ts` | Conflict detection, per-section resolution, resolution strategies |
 
 Supporting modules:
 - `section-parser.ts` / `section-merger.ts` — Section-level merge for conflict resolution
@@ -30,7 +30,7 @@ Supporting modules:
 - `folder-mapper.ts` — Maps SN metadata to vault folder structure
 - `sn-browser-view.ts` — Custom view for browsing SN documents
 - `new-doc-modal.ts` — Modal for new document metadata
-- `conflict-modal.ts` — Conflict resolution UI
+
 - `settings.ts` — Settings tab + defaults
 - `types.ts` — All shared interfaces
 
