@@ -56,10 +56,13 @@ function lcs(a: string[], b: string[]): [number, number][] {
  * Returns empty array if contents are identical.
  */
 export function computeDiff(local: string, remote: string): DiffLine[] {
-  if (local === remote) return [];
+  // Normalize \r\n → \n (SN may use \r\n, Obsidian uses \n)
+  const normalLocal = local.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const normalRemote = remote.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  if (normalLocal === normalRemote) return [];
 
-  const localLines = local ? local.split("\n") : [];
-  const remoteLines = remote ? remote.split("\n") : [];
+  const localLines = normalLocal ? normalLocal.split("\n") : [];
+  const remoteLines = normalRemote ? normalRemote.split("\n") : [];
   const matched = lcs(localLines, remoteLines);
 
   // Build full diff sequence
