@@ -130,6 +130,7 @@ export class SNBrowserView extends ItemView {
         sysId,
         path: file.path,
         lastServerTimestamp: "",
+        contentHash: "",
         lockedBy: "",
         lockedAt: "",
       };
@@ -459,6 +460,16 @@ export class SNBrowserView extends ItemView {
         });
 
         // Side-by-side diff
+        console.log("SNOBBY DEBUG section", s.key, {
+          localBodyLen: s.localBody.length,
+          remoteBodyLen: s.remoteBody.length,
+          localFirst100: JSON.stringify(s.localBody.slice(0, 100)),
+          remoteFirst100: JSON.stringify(s.remoteBody.slice(0, 100)),
+          localLast50: JSON.stringify(s.localBody.slice(-50)),
+          remoteLast50: JSON.stringify(s.remoteBody.slice(-50)),
+          localHasCR: s.localBody.includes("\r"),
+          remoteHasCR: s.remoteBody.includes("\r"),
+        });
         this.renderSideBySide(sectionBlock, s.localBody, s.remoteBody);
       }
 

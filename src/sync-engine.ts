@@ -4,7 +4,7 @@ import type { ApiClient } from "./api-client";
 import type { FrontmatterManager } from "./frontmatter-manager";
 import type { FileWatcher } from "./file-watcher";
 import type { ConflictResolver } from "./conflict-resolver";
-import type { SNDocument, SNMetadata, SyncResult } from "./types";
+import type { SNDocument, SNMetadata, SyncResult, ConflictResponseData } from "./types";
 import type { BaseCache } from "./base-cache";
 import { resolveFilePath, sanitizePathSegment } from "./folder-mapper";
 import { promptNewDocMetadata } from "./new-doc-modal";
@@ -265,6 +265,7 @@ export class SyncEngine {
             sysId: newDoc.sys_id,
             path: file.path,
             lastServerTimestamp: newDoc.sys_updated_on,
+            contentHash: newDoc.content_hash ?? "",
             lockedBy: "",
             lockedAt: "",
           };
@@ -415,6 +416,7 @@ export class SyncEngine {
 
       if (!contentChanged) {
         mapEntry.lastServerTimestamp = doc.sys_updated_on;
+        mapEntry.contentHash = doc.content_hash ?? "";
       } else {
         const fm = this.frontmatterManager.read(file);
         // Metadata cache can be stale — also check if local body differs from last known base
@@ -437,6 +439,7 @@ export class SyncEngine {
             this.fileWatcher.removeSyncWritePath(file.path);
             await this.baseCache.saveBase(doc.sys_id, mergeResult.mergedBody);
             mapEntry.lastServerTimestamp = doc.sys_updated_on;
+            mapEntry.contentHash = doc.content_hash ?? "";
             result.pulled++;
           } else {
             this.conflictResolver.applyConflict({
@@ -463,6 +466,7 @@ export class SyncEngine {
           this.fileWatcher.removeSyncWritePath(file.path);
           await this.baseCache.saveBase(doc.sys_id, stripFrontmatter(doc.content));
           mapEntry.lastServerTimestamp = doc.sys_updated_on;
+          mapEntry.contentHash = doc.content_hash ?? "";
           result.pulled++;
         }
       }
@@ -544,35 +548,89 @@ export class SyncEngine {
         return;
       }
 
+      const mapEntry = this.plugin.syncState.docMap[fm.sys_id];
+      const expectedHash = mapEntry?.contentHash;
       const updateResult = await this.apiClient.updateDocument(fm.sys_id, {
         content,
         title: file.basename,
+        ...(expectedHash ? { expected_hash: expectedHash } : {}),
       });
 
       if (!updateResult.ok) {
         if (updateResult.status === 409) {
-          const latest = await this.apiClient.getDocument(fm.sys_id);
-          if (latest.ok && latest.data) {
-            if (stripFrontmatter(latest.data.content) === stripFrontmatter(content)) {
-              await this.apiClient.checkin(fm.sys_id);
+          const conflictData = updateResult.data as ConflictResponseData | null;
+          await this.apiClient.checkin(fm.sys_id);
+
+          if (conflictData?.content) {
+            const remoteBody = stripFrontmatter(conflictData.content);
+            const localBody = stripFrontmatter(content);
+
+            if (remoteBody === localBody) {
+              // Content converged — no real conflict
               this.fileWatcher.addSyncWritePath(file.path);
               await this.frontmatterManager.markSynced(file);
               this.fileWatcher.removeSyncWritePath(file.path);
-              await this.baseCache.saveBase(fm.sys_id, stripFrontmatter(content));
+              if (conflictData.content_hash && mapEntry) {
+                mapEntry.contentHash = conflictData.content_hash;
+              }
+              await this.baseCache.saveBase(fm.sys_id, localBody);
               result.pushed++;
             } else {
-              await this.apiClient.checkin(fm.sys_id);
-              this.conflictResolver.applyConflict({
-                sysId: fm.sys_id,
-                path: file.path,
-                remoteContent: latest.data.content,
-                remoteTimestamp: latest.data.sys_updated_on,
-                lockedBy: latest.data.checked_out_by || "",
-              });
-              result.conflicts++;
+              // Real conflict — attempt section merge with server ancestor
+              const ancestorBody = conflictData.ancestor_content
+                ? stripFrontmatter(conflictData.ancestor_content)
+                : await this.baseCache.loadBase(fm.sys_id);
+
+              const baseSections = ancestorBody ? parseSections(ancestorBody) : null;
+              const localSections = parseSections(localBody);
+              const remoteSections = parseSections(remoteBody);
+              const mergeResult = mergeSections(baseSections, localSections, remoteSections);
+
+              if (!mergeResult.hasConflicts) {
+                // Auto-merge succeeded — write merged, will re-push next cycle
+                this.fileWatcher.addSyncWritePath(file.path);
+                const merged = await this.rebuildWithFrontmatter(file, mergeResult.mergedBody);
+                await this.plugin.app.vault.modify(file, merged);
+                await this.frontmatterManager.markDirty(file);
+                this.fileWatcher.removeSyncWritePath(file.path);
+                await this.baseCache.saveBase(fm.sys_id, mergeResult.mergedBody);
+                if (conflictData.content_hash && mapEntry) {
+                  mapEntry.contentHash = conflictData.content_hash;
+                }
+              } else {
+                this.conflictResolver.applyConflict({
+                  sysId: fm.sys_id,
+                  path: file.path,
+                  remoteContent: conflictData.content,
+                  remoteTimestamp: conflictData.sys_updated_on,
+                  lockedBy: "",
+                  sectionConflicts: mergeResult.conflicts,
+                  ancestorContent: conflictData.ancestor_content ?? undefined,
+                });
+                result.conflicts++;
+              }
             }
           } else {
-            await this.apiClient.checkin(fm.sys_id);
+            // Fallback: old API without enhanced 409 body
+            const latest = await this.apiClient.getDocument(fm.sys_id);
+            if (latest.ok && latest.data) {
+              if (stripFrontmatter(latest.data.content) === stripFrontmatter(content)) {
+                this.fileWatcher.addSyncWritePath(file.path);
+                await this.frontmatterManager.markSynced(file);
+                this.fileWatcher.removeSyncWritePath(file.path);
+                await this.baseCache.saveBase(fm.sys_id, stripFrontmatter(content));
+                result.pushed++;
+              } else {
+                this.conflictResolver.applyConflict({
+                  sysId: fm.sys_id,
+                  path: file.path,
+                  remoteContent: latest.data.content,
+                  remoteTimestamp: latest.data.sys_updated_on,
+                  lockedBy: latest.data.checked_out_by || "",
+                });
+                result.conflicts++;
+              }
+            }
           }
         } else {
           await this.apiClient.checkin(fm.sys_id);
@@ -591,6 +649,9 @@ export class SyncEngine {
       if (entry) {
         if (updateResult.data) {
           entry.lastServerTimestamp = updateResult.data.sys_updated_on;
+          if (updateResult.data.content_hash) {
+            entry.contentHash = updateResult.data.content_hash;
+          }
         }
         entry.lockedBy = "";
         entry.lockedAt = "";
@@ -654,6 +715,7 @@ export class SyncEngine {
         sysId: newDoc.sys_id,
         path: file.path,
         lastServerTimestamp: newDoc.sys_updated_on,
+        contentHash: newDoc.content_hash ?? "",
         lockedBy: "",
         lockedAt: "",
       };
@@ -730,6 +792,7 @@ export class SyncEngine {
       sysId: doc.sys_id,
       path: finalPath,
       lastServerTimestamp: doc.sys_updated_on,
+      contentHash: doc.content_hash ?? "",
       lockedBy: doc.checked_out_by || "",
       lockedAt: doc.checked_out_by ? doc.sys_updated_on : "",
     };
