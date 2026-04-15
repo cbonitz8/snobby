@@ -25,12 +25,12 @@ Six core modules composed by `SNSyncPlugin` in `src/main.ts`:
 
 Supporting modules:
 - `section-parser.ts` / `section-merger.ts` — Section-level merge for conflict resolution
-- `content-hash.ts` — Content comparison (avoids false conflicts from metadata-only changes)
-- `diff.ts` — Diff utilities
+- `content-hash.ts` — Content normalization, cyrb53 hash (section comparison), MD5 hash (server validation)
+- `diff.ts` — LCS diff, hunk extraction, side-by-side diff rendering
+- `base-cache.ts` — Stores last-known document body for three-way merge
 - `folder-mapper.ts` — Maps SN metadata to vault folder structure
-- `sn-browser-view.ts` — Custom view for browsing SN documents
+- `sn-browser-view.ts` — Custom view for browsing SN documents + conflict resolution UI
 - `new-doc-modal.ts` — Modal for new document metadata
-
 - `settings.ts` — Settings tab + defaults
 - `types.ts` — All shared interfaces
 
@@ -44,7 +44,8 @@ Pull runs before push every cycle:
 
 - Frontmatter fields prefixed with `sn_` (configurable): `sn_sys_id`, `sn_category`, `sn_project`, `sn_tags`, `sn_synced`
 - Document locking via checkout/checkin endpoints
-- Conflict fallback: section-level merge, then git-style markers
+- Conflict resolution: section-level three-way merge, per-section UI in browser tab
+- Optimistic locking: MD5 content hash sent on push, server validates (requires SN API support)
 - Folder placement derived from SN category/project metadata
 - OAuth redirect via `obsidian://sn-obsidian-sync/callback` protocol handler
 
@@ -63,8 +64,8 @@ Pull runs before push every cycle:
 
 ## Obsidian Vault Integration
 
-- **Vault name:** Configured in plugin settings (`settings.vaultName`, e.g. "Ethos")
-- **Vault path:** Configured in plugin settings (`settings.vaultPath`)
+- **Vault name:** Ethos
+- **Vault path:** ~/Obsidian/Ethos Vault/Ethos/
 
 ## Conventions
 
