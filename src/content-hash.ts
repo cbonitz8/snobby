@@ -1,14 +1,27 @@
+import { createHash } from "crypto";
+
 /**
- * Normalize content for comparison: trim trailing whitespace per line,
- * collapse trailing newlines to a single newline.
+ * Normalize content for comparison: normalize line endings, trim trailing
+ * whitespace per line, collapse consecutive blank lines to one, and collapse
+ * trailing newlines to a single newline.
  */
 export function normalizeContent(content: string): string {
-  const lines = content.split("\n").map((line) => line.trimEnd());
+  const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const lines = normalized.split("\n").map((line) => line.trimEnd());
   // Remove empty trailing lines, then ensure single trailing newline
   while (lines.length > 1 && lines[lines.length - 1] === "") {
     lines.pop();
   }
-  return lines.join("\n") + "\n";
+  // Collapse consecutive blank lines to a single blank line
+  const collapsed: string[] = [];
+  let prevBlank = false;
+  for (const line of lines) {
+    const isBlank = line === "";
+    if (isBlank && prevBlank) continue;
+    collapsed.push(line);
+    prevBlank = isBlank;
+  }
+  return collapsed.join("\n") + "\n";
 }
 
 /**
@@ -36,4 +49,13 @@ function cyrb53(str: string, seed = 0): string {
  */
 export function contentHash(content: string): string {
   return cyrb53(normalizeContent(content));
+}
+
+/**
+ * MD5 hash of normalized content. Used for server-side hash validation.
+ * Must produce identical output to SN's GlideDigest.getMD5Hex() on the same
+ * normalized input.
+ */
+export function md5Hash(content: string): string {
+  return createHash("md5").update(normalizeContent(content)).digest("hex");
 }
