@@ -4,6 +4,8 @@ import type { ConflictEntry } from "./types";
 import type { BaseCache } from "./base-cache";
 import { ConflictModal } from "./conflict-modal";
 import { stripFrontmatter } from "./frontmatter-manager";
+import { parseSections, serializeSections } from "./section-parser";
+import { mergeSections } from "./section-merger";
 
 const MARKER_LOCAL = "<<<<<<< Local (Obsidian)";
 const MARKER_SEPARATOR = "=======";
@@ -32,6 +34,40 @@ export function stripConflictMarkers(content: string): string {
   const after = content.substring(endIdx + MARKER_REMOTE.length).replace(/^\n/, "");
 
   return [before, localPortion.replace(/\n$/, ""), after].filter((s) => s.length > 0).join("\n");
+}
+
+/**
+ * Assemble a merged document body from per-section user choices.
+ * Runs mergeSections() to auto-resolve non-conflicting sections,
+ * then substitutes user choices for conflicting ones.
+ */
+export function assemblePerSectionMerge(
+  localBody: string,
+  remoteBody: string,
+  baseBody: string | null,
+  choices: Map<string, "local" | "remote">,
+): string {
+  const baseSections = baseBody ? parseSections(baseBody) : null;
+  const localSections = parseSections(localBody);
+  const remoteSections = parseSections(remoteBody);
+  const mergeResult = mergeSections(baseSections, localSections, remoteSections);
+
+  // Start with the auto-merged result parsed back into sections
+  const mergedSections = parseSections(mergeResult.mergedBody);
+  const final = new Map(mergedSections);
+
+  // Override conflicting sections with user choices
+  for (const conflict of mergeResult.conflicts) {
+    const choice = choices.get(conflict.key);
+    if (!choice) continue;
+    const source = choice === "local" ? localSections : remoteSections;
+    const section = source.get(conflict.key);
+    if (section) {
+      final.set(conflict.key, section);
+    }
+  }
+
+  return serializeSections(final);
 }
 
 export class ConflictResolver {
@@ -115,6 +151,51 @@ export class ConflictResolver {
 
     const fileName = conflict.path.split("/").pop() ?? conflict.path;
     new Notice(`"${fileName}" will push local content on next sync.`);
+  }
+
+  async resolvePerSection(sysId: string, choices: Map<string, "local" | "remote">): Promise<void> {
+    const conflict = this.plugin.syncState.conflicts[sysId];
+    if (!conflict) return;
+
+    const file = this.plugin.app.vault.getAbstractFileByPath(conflict.path);
+    if (!(file instanceof TFile)) {
+      delete this.plugin.syncState.conflicts[sysId];
+      await this.plugin.saveSettings();
+      return;
+    }
+
+    const raw = await this.plugin.app.vault.read(file);
+    const localBody = stripFrontmatter(raw);
+    const remoteBody = stripFrontmatter(conflict.remoteContent);
+    const baseBody = await this.baseCache.loadBase(sysId);
+
+    const mergedBody = assemblePerSectionMerge(localBody, remoteBody, baseBody, choices);
+
+    // Rebuild file with existing frontmatter + merged body
+    let newContent: string;
+    if (raw.startsWith("---")) {
+      const endIdx = raw.indexOf("\n---", 3);
+      if (endIdx !== -1) {
+        newContent = raw.substring(0, endIdx + 4) + "\n" + mergedBody;
+      } else {
+        newContent = mergedBody;
+      }
+    } else {
+      newContent = mergedBody;
+    }
+
+    this.plugin.fileWatcher.addSyncWritePath(conflict.path);
+    await this.plugin.app.vault.modify(file, newContent);
+    await this.plugin.frontmatterManager.markDirty(file);
+    this.plugin.fileWatcher.removeSyncWritePath(conflict.path);
+
+    await this.baseCache.saveBase(sysId, mergedBody);
+
+    delete this.plugin.syncState.conflicts[sysId];
+    await this.plugin.saveSettings();
+
+    const fileName = conflict.path.split("/").pop() ?? conflict.path;
+    new Notice(`"${fileName}" merged with per-section choices.`);
   }
 
   getConflictForPath(path: string): ConflictEntry | null {
