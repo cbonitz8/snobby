@@ -97,8 +97,29 @@ export class SyncEngine {
         if (result.pulled > 0) parts.push(`${result.pulled} pulled`);
         if (result.pushed > 0) parts.push(`${result.pushed} pushed`);
         const totalConflicts = Object.keys(this.plugin.syncState.conflicts).length;
-        if (totalConflicts > 0) parts.push(`${totalConflicts} conflict${totalConflicts > 1 ? "s" : ""}`);
-        new Notice(parts.length > 0 ? `Snobby: ${parts.join(", ")}` : "Snobby: everything up to date");
+        if (totalConflicts > 0) {
+          parts.push(`${totalConflicts} conflict${totalConflicts > 1 ? "s" : ""}`);
+          const frag = document.createDocumentFragment();
+          const container = frag.createEl("div", { cls: "sn-conflict-notice" });
+          container.createEl("div", {
+            text: `Snobby: ${parts.join(", ")}`,
+            cls: "sn-conflict-notice-title",
+          });
+          const viewBtn = container.createEl("button", {
+            text: "View conflicts",
+            cls: "sn-action-btn sn-conflict-notice-btn",
+          });
+          const notice = new Notice(frag, 0);
+          viewBtn.addEventListener("click", () => {
+            const firstSysId = Object.keys(this.plugin.syncState.conflicts)[0];
+            if (firstSysId) {
+              void this.plugin.openConflictInBrowser(firstSysId);
+            }
+            notice.hide();
+          });
+        } else {
+          new Notice(parts.length > 0 ? `Snobby: ${parts.join(", ")}` : "Snobby: everything up to date");
+        }
       }
       this.plugin.updateStatusBar(result.errors.length > 0 ? "error" : "idle");
     }

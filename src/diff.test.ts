@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeDiff, extractHunks, computeSideBySide, type DiffLine, type SideBySideLine } from "./diff";
+import { computeDiff, extractHunks, computeSideBySide, extractSideBySideHunks, type DiffLine, type SideBySideLine } from "./diff";
 
 describe("computeDiff", () => {
   it("returns empty array for identical content", () => {
@@ -197,5 +197,28 @@ describe("computeSideBySide", () => {
     expect(result).toEqual([
       { left: { text: "old line", type: "removed" }, right: null },
     ]);
+  });
+});
+
+describe("extractSideBySideHunks", () => {
+  it("trims context-only lines and shows hunks with 3-line context", () => {
+    // 10 identical lines, then 1 changed line, then 10 more identical
+    const localLines = Array.from({ length: 21 }, (_, i) => i === 10 ? "OLD" : `line ${i}`);
+    const remoteLines = Array.from({ length: 21 }, (_, i) => i === 10 ? "NEW" : `line ${i}`);
+    const local = localLines.join("\n");
+    const remote = remoteLines.join("\n");
+
+    const allLines = computeSideBySide(local, remote);
+    expect(allLines.length).toBe(21); // all 21 lines present
+
+    const hunks = extractSideBySideHunks(allLines);
+    expect(hunks.length).toBe(1);
+    // 3 context before + 1 changed + 3 context after = 7
+    expect(hunks[0]!.lines.length).toBe(7);
+    // Changed line should be in the middle
+    const changed = hunks[0]!.lines.find((l) => l.left?.type === "removed");
+    expect(changed).toBeDefined();
+    expect(changed!.left!.text).toBe("OLD");
+    expect(changed!.right!.text).toBe("NEW");
   });
 });
