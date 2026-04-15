@@ -1,8 +1,6 @@
 import { ItemView, WorkspaceLeaf, Notice, Menu, TFile, Modal, Setting } from "obsidian";
 import type SNSyncPlugin from "./main";
 import type { SNDocument, SNMetadata, ConflictEntry } from "./types";
-import { computeDiff, extractHunks } from "./diff";
-import { stripFrontmatter } from "./frontmatter-manager";
 
 export const VIEW_TYPE_SN_BROWSER = "sn-document-browser";
 
@@ -19,8 +17,9 @@ export class SNBrowserView extends ItemView {
   private selectedDocIds: Set<string> = new Set();
   private selectedTreeNode: string = "";
   private expandedNodes: Set<string> = new Set();
-  private expandedConflictId: string | null = null;
-  private showDiffForConflict: string | null = null;
+  private viewMode: "triage" | "drill-in" = "triage";
+  private drillInSysId: string | null = null;
+  private perSectionChoices: Map<string, Map<string, "local" | "remote">> = new Map();
 
   constructor(leaf: WorkspaceLeaf, plugin: SNSyncPlugin) {
     super(leaf);
@@ -45,8 +44,8 @@ export class SNBrowserView extends ItemView {
 
   async showConflict(sysId: string) {
     this.activeTab = "settings";
-    this.expandedConflictId = sysId;
-    this.showDiffForConflict = null;
+    this.drillInSysId = sysId;
+    this.viewMode = "drill-in";
     await this.render();
   }
 
@@ -333,105 +332,17 @@ export class SNBrowserView extends ItemView {
 
     if (conflicts.length === 0) {
       conflictSection.createEl("p", { text: "No conflicts.", cls: "sn-conflict-empty" });
-    } else {
-      const conflictActions = conflictSection.createDiv({ cls: "sn-conflict-actions" });
-      const clearStaleBtn = conflictActions.createEl("button", { text: "Clear stale conflicts", cls: "sn-action-btn" });
-      clearStaleBtn.addEventListener("click", () => {
-        void (async () => {
-          const cleared = await this.plugin.conflictResolver.clearStaleConflicts();
-          new Notice(cleared > 0
-            ? `Cleared ${cleared} stale conflict${cleared > 1 ? "s" : ""}`
-            : "No stale conflicts found");
-          await this.render();
-        })();
-      });
-      const dismissAllBtn = conflictActions.createEl("button", { text: "Dismiss all", cls: "sn-action-btn sn-action-btn-danger" });
-      dismissAllBtn.addEventListener("click", () => {
-        void (async () => {
-          await this.plugin.conflictResolver.clearAllConflicts();
-          new Notice("All conflicts dismissed");
-          await this.render();
-        })();
-      });
-
-      const conflictList = conflictSection.createDiv({ cls: "sn-conflict-list" });
-      for (const conflict of conflicts) {
-        const fileName = conflict.path.split("/").pop() ?? conflict.path;
-        const isExpanded = this.expandedConflictId === conflict.sysId;
-
-        const row = conflictList.createDiv({ cls: `sn-conflict-row ${isExpanded ? "is-expanded" : ""}` });
-        row.addEventListener("click", () => {
-          this.expandedConflictId = isExpanded ? null : conflict.sysId;
-          if (!isExpanded) this.showDiffForConflict = null;
-          void this.render();
-        });
-
-        const info = row.createDiv({ cls: "sn-conflict-info" });
-        info.createEl("span", { text: fileName, cls: "sn-conflict-name" });
-        const meta = info.createDiv({ cls: "sn-conflict-meta" });
-        if (conflict.remoteTimestamp) {
-          const remoteMtime = new Date(conflict.remoteTimestamp.replace(" ", "T"));
-          const remoteTimeStr = isNaN(remoteMtime.getTime())
-            ? conflict.remoteTimestamp
-            : remoteMtime.toLocaleDateString();
-          meta.createEl("span", { text: `Remote: ${remoteTimeStr}` });
-        }
-        if (conflict.lockedBy) {
-          meta.createEl("span", { text: `Locked by: ${conflict.lockedBy}` });
-        }
-        const sc = conflict.sectionConflicts;
-        if (sc && sc.length > 0) {
-          meta.createEl("span", {
-            text: `${sc.length} section conflict${sc.length > 1 ? "s" : ""}`,
-            cls: "sn-conflict-meta-sections",
-          });
-        }
-
-        const actions = row.createDiv({ cls: "sn-conflict-row-actions" });
-        const openBtn = actions.createEl("button", { text: "Open", cls: "sn-action-btn" });
-        openBtn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          const file = this.plugin.app.vault.getAbstractFileByPath(conflict.path);
-          if (file instanceof TFile) {
-            void this.plugin.app.workspace.getLeaf(false).openFile(file);
-          }
-        });
-        const pullBtn = actions.createEl("button", { text: "Pull remote", cls: "sn-action-btn mod-cta" });
-        pullBtn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          void (async () => {
-            await this.plugin.conflictResolver.resolveWithPull(conflict.sysId);
-            this.expandedConflictId = null;
-            this.showDiffForConflict = null;
-            await this.render();
-          })();
-        });
-        const pushBtn = actions.createEl("button", { text: "Push local", cls: "sn-action-btn" });
-        pushBtn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          void (async () => {
-            await this.plugin.conflictResolver.resolveWithPush(conflict.sysId);
-            this.expandedConflictId = null;
-            this.showDiffForConflict = null;
-            await this.render();
-          })();
-        });
-        const dismissBtn = actions.createEl("button", { text: "Dismiss", cls: "sn-action-btn sn-action-btn-danger" });
-        dismissBtn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          void (async () => {
-            delete this.plugin.syncState.conflicts[conflict.sysId];
-            await this.plugin.saveSettings();
-            this.expandedConflictId = null;
-            this.showDiffForConflict = null;
-            await this.render();
-          })();
-        });
-
-        if (isExpanded) {
-          this.renderConflictExpanded(conflictList, conflict);
-        }
+    } else if (this.viewMode === "drill-in" && this.drillInSysId) {
+      const conflict = this.plugin.syncState.conflicts[this.drillInSysId];
+      if (conflict) {
+        this.renderDrillIn(conflictSection, conflict);
+      } else {
+        this.viewMode = "triage";
+        this.drillInSysId = null;
+        this.renderTriageList(conflictSection, conflicts);
       }
+    } else {
+      this.renderTriageList(conflictSection, conflicts);
     }
 
     const excludeSection = container.createDiv({ cls: "sn-exclude-section" });
@@ -480,73 +391,174 @@ export class SNBrowserView extends ItemView {
     }
   }
 
-  private renderConflictExpanded(container: HTMLElement, conflict: ConflictEntry) {
-    const expanded = container.createDiv({ cls: "sn-conflict-row-expanded" });
-    expanded.addEventListener("click", (e) => e.stopPropagation());
+  private renderDrillIn(container: HTMLElement, conflict: ConflictEntry) {
+    // Implemented in Task 7
+    container.createEl("p", { text: "Drill-in view — coming soon" });
+  }
 
-    // Section conflict detail
+  private renderTriageList(container: HTMLElement, conflicts: ConflictEntry[]) {
+    const conflictActions = container.createDiv({ cls: "sn-conflict-actions" });
+    const clearStaleBtn = conflictActions.createEl("button", { text: "Clear stale conflicts", cls: "sn-action-btn" });
+    clearStaleBtn.addEventListener("click", () => {
+      void (async () => {
+        const cleared = await this.plugin.conflictResolver.clearStaleConflicts();
+        new Notice(cleared > 0
+          ? `Cleared ${cleared} stale conflict${cleared > 1 ? "s" : ""}`
+          : "No stale conflicts found");
+        await this.render();
+      })();
+    });
+    const dismissAllBtn = conflictActions.createEl("button", { text: "Dismiss all", cls: "sn-action-btn sn-action-btn-danger" });
+    dismissAllBtn.addEventListener("click", () => {
+      void (async () => {
+        await this.plugin.conflictResolver.clearAllConflicts();
+        this.perSectionChoices.clear();
+        new Notice("All conflicts dismissed");
+        await this.render();
+      })();
+    });
+
+    const conflictList = container.createDiv({ cls: "sn-conflict-list" });
+    for (const conflict of conflicts) {
+      this.renderTriageRow(conflictList, conflict);
+    }
+  }
+
+  private renderTriageRow(container: HTMLElement, conflict: ConflictEntry) {
+    const fileName = conflict.path.split("/").pop() ?? conflict.path;
     const sc = conflict.sectionConflicts;
-    if (sc && sc.length > 0) {
-      const sectionInfo = expanded.createDiv({ cls: "sn-conflict-section-summary" });
-      for (const s of sc) {
-        const item = sectionInfo.createDiv({ cls: "sn-conflict-section-item" });
-        item.createEl("strong", { text: s.heading });
-        const preview = item.createDiv({ cls: "sn-conflict-section-preview" });
-        const localPre = preview.createDiv({ cls: "sn-conflict-section-local" });
-        localPre.createEl("span", { text: "Local:", cls: "sn-conflict-section-label" });
-        localPre.createEl("pre", { text: s.localBody.slice(0, 200) + (s.localBody.length > 200 ? "..." : "") });
-        const remotePre = preview.createDiv({ cls: "sn-conflict-section-remote" });
-        remotePre.createEl("span", { text: "Remote:", cls: "sn-conflict-section-label" });
-        remotePre.createEl("pre", { text: s.remoteBody.slice(0, 200) + (s.remoteBody.length > 200 ? "..." : "") });
-      }
+    const hasSections = sc && sc.length > 0;
+
+    const row = container.createDiv({ cls: "sn-conflict-row" });
+
+    const info = row.createDiv({ cls: "sn-conflict-info" });
+    info.createEl("span", { text: fileName, cls: "sn-conflict-name" });
+
+    const meta = info.createDiv({ cls: "sn-conflict-meta" });
+    if (conflict.remoteTimestamp) {
+      const remoteMtime = new Date(conflict.remoteTimestamp.replace(" ", "T"));
+      const remoteTimeStr = isNaN(remoteMtime.getTime())
+        ? conflict.remoteTimestamp
+        : remoteMtime.toLocaleDateString();
+      meta.createEl("span", { text: `Remote: ${remoteTimeStr}` });
+    }
+    if (conflict.lockedBy) {
+      meta.createEl("span", { text: `Locked by: ${conflict.lockedBy}` });
     }
 
-    // Diff toggle
-    const showingDiff = this.showDiffForConflict === conflict.sysId;
-    const diffToggle = expanded.createEl("button", {
-      text: showingDiff ? "Hide diff" : "Show diff",
-      cls: "sn-action-btn sn-conflict-diff-toggle",
-    });
-    diffToggle.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this.showDiffForConflict = showingDiff ? null : conflict.sysId;
-      void this.render();
-    });
+    if (hasSections) {
+      const names = sc.map((s) => s.heading.replace(/^###\s*/, ""));
+      const sectionNames = info.createDiv({ cls: "sn-conflict-section-names" });
+      sectionNames.createEl("strong", { text: "Conflicts in: " });
+      sectionNames.appendText(names.join(", "));
+    } else {
+      const sectionNames = info.createDiv({ cls: "sn-conflict-section-names" });
+      sectionNames.createEl("strong", { text: "Whole-file conflict" });
+    }
 
-    if (showingDiff) {
+    // Action buttons
+    const actions = row.createDiv({ cls: "sn-conflict-row-actions" });
+
+    const openBtn = actions.createEl("button", { text: "Open", cls: "sn-action-btn" });
+    openBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
       const file = this.plugin.app.vault.getAbstractFileByPath(conflict.path);
       if (file instanceof TFile) {
+        void this.plugin.app.workspace.getLeaf(false).openFile(file);
+      }
+    });
+
+    if (hasSections) {
+      const diffBtn = actions.createEl("button", { text: "View diff", cls: "sn-action-btn mod-cta" });
+      diffBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.viewMode = "drill-in";
+        this.drillInSysId = conflict.sysId;
+        void this.render();
+      });
+    }
+
+    // Whole-file fallback buttons (no sections)
+    if (!hasSections) {
+      const pullBtn = actions.createEl("button", { text: "Pull remote", cls: "sn-action-btn mod-cta" });
+      pullBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
         void (async () => {
-          const rawLocal = await this.plugin.app.vault.read(file);
-          const localBody = stripFrontmatter(rawLocal);
-          const remoteBody = stripFrontmatter(conflict.remoteContent);
-          const diffLines = computeDiff(localBody, remoteBody);
-
-          if (diffLines.length === 0) {
-            expanded.createEl("p", { text: "Contents are identical.", cls: "sn-conflict-empty" });
-            return;
-          }
-
-          const legend = expanded.createDiv({ cls: "sn-diff-legend" });
-          legend.createSpan({ cls: "sn-diff-legend-item sn-diff-legend-local", text: "\u2212 Local" });
-          legend.createSpan({ cls: "sn-diff-legend-item sn-diff-legend-remote", text: "+ Remote" });
-
-          const hunks = extractHunks(diffLines);
-          const diffContainer = expanded.createDiv({ cls: "sn-conflict-inline-diff" });
-
-          for (let i = 0; i < hunks.length; i++) {
-            if (i > 0) {
-              diffContainer.createDiv({ cls: "sn-diff-separator", text: "\u22EF" });
-            }
-            const hunkEl = diffContainer.createDiv({ cls: "sn-diff-hunk" });
-            for (const line of hunks[i]!.lines) {
-              const lineEl = hunkEl.createDiv({ cls: `sn-diff-line sn-diff-${line.type}` });
-              const prefix = line.type === "added" ? "+" : line.type === "removed" ? "\u2212" : " ";
-              lineEl.createSpan({ text: prefix, cls: "sn-diff-prefix" });
-              lineEl.createSpan({ text: line.text });
-            }
-          }
+          await this.plugin.conflictResolver.resolveWithPull(conflict.sysId);
+          await this.render();
         })();
+      });
+      const pushBtn = actions.createEl("button", { text: "Push local", cls: "sn-action-btn" });
+      pushBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        void (async () => {
+          await this.plugin.conflictResolver.resolveWithPush(conflict.sysId);
+          await this.render();
+        })();
+      });
+    }
+
+    const dismissBtn = actions.createEl("button", { text: "Dismiss", cls: "sn-action-btn sn-action-btn-danger" });
+    dismissBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      void (async () => {
+        delete this.plugin.syncState.conflicts[conflict.sysId];
+        this.perSectionChoices.delete(conflict.sysId);
+        await this.plugin.saveSettings();
+        await this.render();
+      })();
+    });
+
+    // Per-section quick buttons (only if sections exist)
+    if (hasSections) {
+      const quickActions = container.createDiv({ cls: "sn-conflict-quick-actions" });
+      quickActions.addEventListener("click", (e) => e.stopPropagation());
+
+      if (!this.perSectionChoices.has(conflict.sysId)) {
+        this.perSectionChoices.set(conflict.sysId, new Map());
+      }
+      const choices = this.perSectionChoices.get(conflict.sysId)!;
+
+      for (const s of sc) {
+        const sectionRow = quickActions.createDiv({ cls: "sn-conflict-quick-section" });
+        const name = s.heading.replace(/^###\s*/, "");
+        sectionRow.createEl("span", { text: name, cls: "sn-conflict-quick-section-name" });
+
+        const btns = sectionRow.createDiv({ cls: "sn-conflict-quick-btns" });
+        const currentChoice = choices.get(s.key);
+
+        const remoteBtn = btns.createEl("button", {
+          text: "Remote",
+          cls: `sn-conflict-quick-btn ${currentChoice === "remote" ? "is-chosen" : ""}`,
+        });
+        remoteBtn.addEventListener("click", () => {
+          choices.set(s.key, "remote");
+          void this.render();
+        });
+
+        const localBtn = btns.createEl("button", {
+          text: "Local",
+          cls: `sn-conflict-quick-btn ${currentChoice === "local" ? "is-chosen" : ""}`,
+        });
+        localBtn.addEventListener("click", () => {
+          choices.set(s.key, "local");
+          void this.render();
+        });
+      }
+
+      // Apply button — only shows when all sections have a choice
+      if (choices.size === sc.length) {
+        const applyBtn = quickActions.createEl("button", {
+          text: "Apply choices",
+          cls: "sn-action-btn mod-cta",
+        });
+        applyBtn.addEventListener("click", () => {
+          void (async () => {
+            await this.plugin.conflictResolver.resolvePerSection(conflict.sysId, choices);
+            this.perSectionChoices.delete(conflict.sysId);
+            await this.render();
+          })();
+        });
       }
     }
   }
