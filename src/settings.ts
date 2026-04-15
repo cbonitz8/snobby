@@ -208,7 +208,7 @@ export class SNSyncSettingTab extends PluginSettingTab {
       .setDesc("Name of this Obsidian vault (used by CLI integrations)")
       .addText((text) =>
         text
-          .setPlaceholder("e.g. Ethos")
+          .setPlaceholder("e.g. My Vault")
           .setValue(this.plugin.settings.vaultName)
           .onChange(async (value) => {
             this.plugin.settings.vaultName = value;

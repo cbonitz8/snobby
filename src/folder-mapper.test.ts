@@ -53,23 +53,23 @@ describe("resolveFilePath", () => {
   });
 
   it("places topLevel category at vault root even with a project", () => {
-    const result = resolveFilePath(MAPPING, "ATS import notes", "ATS", "daily_log", "");
-    expect(result).toBe("Daily Logs/ATS import notes.md");
+    const result = resolveFilePath(MAPPING, "Import notes", "Acme App", "daily_log", "");
+    expect(result).toBe("Daily Logs/Import notes.md");
   });
 
   it("places standup at vault root ignoring project", () => {
-    const result = resolveFilePath(MAPPING, "Standup", "Ethos MD", "standup", "");
+    const result = resolveFilePath(MAPPING, "Standup", "Acme Portal", "standup", "");
     expect(result).toBe("Standups/Standup.md");
   });
 
   it("places reference doc in Resources/Components at vault root", () => {
-    const result = resolveFilePath(MAPPING, "Ethos Table", "Ethos MD", "reference", "");
-    expect(result).toBe("Resources/Components/Ethos Table.md");
+    const result = resolveFilePath(MAPPING, "Widget Table", "Acme Portal", "reference", "");
+    expect(result).toBe("Resources/Components/Widget Table.md");
   });
 
   it("places project overview at project root", () => {
-    const result = resolveFilePath(MAPPING, "Ethos MD Overview", "Ethos MD", "project_overview", "");
-    expect(result).toBe("Ethos MD/Ethos MD Overview.md");
+    const result = resolveFilePath(MAPPING, "Acme Portal Overview", "Acme Portal", "project_overview", "");
+    expect(result).toBe("Acme Portal/Acme Portal Overview.md");
   });
 });
 
