@@ -7,7 +7,7 @@ const MAPPING: FolderMapping = {
   categories: {
     session_log: "Session Logs",
     design_spec: "Design Specs",
-    project_overview: "",
+    project_overview: "Project Overviews",
     qa_document: {
       root: "QA",
       subfolders: ["In Progress", "Complete"],
@@ -67,9 +67,9 @@ describe("resolveFilePath", () => {
     expect(result).toBe("Resources/Components/Widget Table.md");
   });
 
-  it("places project overview at project root", () => {
+  it("places project overview in Project Overviews subfolder", () => {
     const result = resolveFilePath(MAPPING, "Acme Portal Overview", "Acme Portal", "project_overview", "");
-    expect(result).toBe("Acme Portal/Acme Portal Overview.md");
+    expect(result).toBe("Acme Portal/Project Overviews/Acme Portal Overview.md");
   });
 });
 

@@ -1,6 +1,6 @@
 {
   "name": "sn-obsidian-sync",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "Bidirectional sync between Obsidian and ServiceNow",
   "main": "main.js",
   "type": "module",
