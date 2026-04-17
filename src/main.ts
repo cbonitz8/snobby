@@ -285,6 +285,15 @@ export default class SNSyncPlugin extends Plugin {
     }
   }
 
+  refreshBrowserView() {
+    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_SN_BROWSER);
+    for (const leaf of leaves) {
+      if (leaf.view instanceof SNBrowserView) {
+        void leaf.view.render();
+      }
+    }
+  }
+
   private async checkDuplicateSysIds() {
     const prefix = this.settings.frontmatterPrefix;
     const sysIdMap = new Map<string, string[]>();

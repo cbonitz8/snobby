@@ -131,6 +131,7 @@ export class SyncEngine {
         }
       }
       this.plugin.updateStatusBar(result.errors.length > 0 ? "error" : "idle");
+      this.plugin.refreshBrowserView();
     }
     return result;
   }
@@ -450,9 +451,18 @@ export class SyncEngine {
         mapEntry.contentHash = doc.content_hash ?? "";
       } else {
         const fm = this.frontmatterManager.read(file);
-        // Metadata cache can be stale — also check if local body differs from last known base
+        // Metadata cache can be stale — also check if local body differs from last known base.
+        // If no base cache exists, re-read synced flag directly from file to avoid metadata cache race.
         const baseBody = await this.baseCache.loadBase(doc.sys_id);
-        const localDirty = fm.synced === false || (baseBody !== null && localBody !== baseBody);
+        let localDirty = fm.synced === false || (baseBody !== null && localBody !== baseBody);
+        if (!localDirty && baseBody === null) {
+          // No base to compare — re-read file to check synced flag directly
+          const raw = await this.plugin.app.vault.read(file);
+          const syncedMatch = raw.match(/sn_synced:\s*(true|false|"true"|"false")/);
+          if (syncedMatch && (syncedMatch[1] === "false" || syncedMatch[1] === '"false"')) {
+            localDirty = true;
+          }
+        }
         if (localDirty) {
           // Both sides changed — attempt section-level merge
           const remoteBody = stripFrontmatter(doc.content);

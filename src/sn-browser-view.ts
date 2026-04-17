@@ -55,7 +55,7 @@ export class SNBrowserView extends ItemView {
 
   async onClose() {}
 
-  private async render() {
+  async render() {
     const container = this.containerEl.children[1] as HTMLElement;
     container.empty();
     container.addClass("sn-browser");
