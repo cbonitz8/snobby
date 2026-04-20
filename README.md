@@ -14,9 +14,10 @@ Bidirectional sync between an Obsidian vault and a ServiceNow Scripted REST API.
 - **Bidirectional sync** — edits in Obsidian push to SN, edits in SN pull to Obsidian
 - **OAuth 2.0 authentication** — each user authenticates individually, SN knows who made each change
 - **Automatic or manual sync** — configurable interval (default 30s) or on-demand via command palette
-- **Document locking** — auto-checkout on edit prevents conflicting changes; git-style conflict markers as fallback
+- **Section-aware conflict resolution** — three-way merge at the section level auto-resolves non-conflicting edits; interactive side-by-side diff for true conflicts
 - **Content-aware sync** — compares actual content, not just timestamps, to avoid false conflicts from metadata-only SN changes
-- **Folder structure from metadata** — documents are organized into project/category folders automatically based on SN fields
+- **Optimistic locking** — MD5 content hash validated server-side on every push; 409 responses trigger merge instead of silent overwrites
+- **Folder structure from metadata** — documents are organized into project/category folders automatically based on SN fields; new categories auto-derive folder names
 - **Frontmatter tracking** — each file has `sn_sys_id`, `sn_category`, `sn_project`, `sn_tags`, `sn_synced` in YAML frontmatter
 - **Live metadata from SN** — categories, projects, and tags are fetched from the instance, not hardcoded
 
@@ -27,11 +28,12 @@ Six core modules composed by the main plugin class:
 | Module | Responsibility |
 |--------|---------------|
 | `AuthManager` | OAuth 2.0 flow — authorize, store tokens, auto-refresh |
-| `ApiClient` | Wraps all REST calls (CRUD, checkout/checkin, getChanges, metadata) |
+| `ApiClient` | Wraps all REST calls (CRUD, getChanges, metadata) |
 | `SyncEngine` | Orchestrates pull/push cycles, bulk push, initial pull |
 | `FileWatcher` | Monitors vault for creates/edits/deletes, debounces, flags dirty files |
 | `FrontmatterManager` | Reads/writes SN frontmatter fields via Obsidian API |
-| `ConflictResolver` | Detects conflicts, injects git-style markers for manual resolution |
+| `ConflictResolver` | Detects conflicts, per-section resolution, merge strategies |
+| `FolderMapper` | Maps SN category/project metadata to vault folder paths |
 
 ## Setup
 
@@ -39,7 +41,7 @@ Six core modules composed by the main plugin class:
 
 The plugin requires a Scripted REST API on your SN instance. See [`docs/sn-side-implementation.md`](docs/sn-side-implementation.md) for complete setup instructions including:
 
-- Scripted REST API with 10 endpoints (CRUD, checkout/checkin, getChanges, metadata)
+- Scripted REST API with 7 endpoints (CRUD, getChanges, metadata)
 - OAuth Application registration
 - Table schema (your custom table with category, project, tags, content, locking fields)
 - Choice values for categories and projects
@@ -107,7 +109,7 @@ The plugin expects each document to have these fields:
   "project": "my_project",
   "tags": "tag1, tag2",
   "sys_updated_on": "2026-04-01 12:00:00",
-  "checked_out_by": ""
+  "content_hash": "abc123def456"
 }
 ```
 
@@ -155,7 +157,8 @@ Returns `404` if not found.
 ```json
 {
   "title": "Updated Title",
-  "content": "Updated content"
+  "content": "Updated content",
+  "expected_hash": "abc123def456"
 }
 ```
 
@@ -164,7 +167,7 @@ Returns `404` if not found.
 { "result": { ...updated document } }
 ```
 
-Returns `409` if the document was modified by another user (conflict).
+Returns `409` if content hash doesn't match (conflict). The 409 response body should include the current remote content, content hash, and optionally the ancestor content for three-way merge.
 
 #### DELETE /documents/{id} — Delete document
 
@@ -180,37 +183,6 @@ Returns documents where `sys_updated_on > since`. Used for incremental sync.
 ```
 
 Returns an empty array if no changes.
-
-#### POST /documents/{id}/checkout — Lock document
-
-Sets the current user as the lock holder.
-
-**Response:**
-```json
-{ "result": { ...document with checked_out_by set } }
-```
-
-Returns `423` if already locked by another user.
-
-#### POST /documents/{id}/checkin — Unlock document
-
-Clears the lock. Only the user who checked it out can check it in.
-
-**Response:**
-```json
-{ "result": { ...document with checked_out_by cleared } }
-```
-
-Returns `403` if locked by a different user.
-
-#### POST /documents/{id}/force-checkin — Force unlock
-
-Clears the lock regardless of who holds it. For admin use.
-
-**Response:**
-```json
-{ "result": { ...document with checked_out_by cleared } }
-```
 
 ### GET {metadataPath} — Get metadata
 
@@ -248,25 +220,17 @@ Pull always runs before push. Every cycle:
    - New doc → create local file per folder mapping
 
 2. **Push** — find all files with `sn_synced: false`
-   - Has `sn_sys_id` → checkout, update, checkin
-   - No `sn_sys_id` but has metadata → create in SN automatically
-   - No `sn_sys_id` and no metadata → prompt via modal
+   - Has `sn_sys_id` → update with expected content hash for optimistic locking
+   - No `sn_sys_id` but has valid metadata → create in SN automatically
+   - No `sn_sys_id` and no/template metadata → prompt via modal
 
 ### Conflict Resolution
 
-**Primary:** locking. The plugin calls checkout when you edit a file. Other users see it as locked.
+**Optimistic locking:** every push includes an expected content hash. If the server detects a mismatch (another user edited since your last pull), it returns 409 with the remote content and ancestor.
 
-**Fallback:** if a push fails because the remote changed (lock expired, force-released), the plugin compares content. If identical, it re-acquires the lock and pushes. If different, it injects git-style markers:
+**Three-way merge:** the plugin performs section-aware three-way merge using the common ancestor (stored in a local base cache). Non-conflicting changes in different sections auto-merge silently. Only true per-section conflicts require user intervention.
 
-```
-<<<<<<< Local (Obsidian)
-Your local content
-=======
-Remote content from ServiceNow
->>>>>>> Remote (ServiceNow)
-```
-
-Resolve manually, then the next sync pushes the resolved version.
+**Interactive resolution:** conflicts surface in the Snobby Browser tab with a two-tier UI — triage list with per-section quick-resolve buttons, and a drill-in side-by-side diff view for detailed per-line review.
 
 ### Delete Handling
 
@@ -299,10 +263,13 @@ Resources/
 The folder mapping is configurable in settings. The default maps:
 - `session_log` → `Session Logs/`
 - `design_spec` → `Design Specs/`
-- `daily_log` → `Daily Logs/`
-- `project_overview` → project root
-- `qa_document` → `QA/` with `In Progress/` and `Complete/` subfolders
-- `reference` → `Resources/`
+- `daily_log` → `Daily Logs/` (top-level)
+- `standup` → `Standups/` (top-level)
+- `project_overview` → `Project Overviews/`
+- `reference` → `Resources/Components/` (top-level)
+- `template` → `Templates/` (top-level)
+
+Categories not in the mapping are auto-resolved: the plugin uses the metadata label from SN if available, otherwise title-cases the value (e.g., `story_time` → "Story Time").
 
 ## Frontmatter
 
@@ -359,9 +326,15 @@ src/
   sync-engine.ts          # Pull/push orchestration
   file-watcher.ts         # Vault event monitoring
   frontmatter-manager.ts  # YAML frontmatter read/write
-  conflict-resolver.ts    # Conflict detection + markers
+  conflict-resolver.ts    # Conflict detection + resolution strategies
   new-doc-modal.ts        # New document metadata prompt
-  folder-mapper.ts        # Folder placement logic
+  folder-mapper.ts        # Category/project → folder path mapping
+  section-parser.ts       # Heading-based section extraction
+  section-merger.ts       # Three-way section-aware merge
+  content-hash.ts         # Content normalization + hashing (cyrb53 + MD5)
+  diff.ts                 # LCS diff, hunk extraction, side-by-side rendering
+  base-cache.ts           # Common ancestor storage for three-way merge
+  sn-browser-view.ts      # Document browser + conflict resolution UI
 ```
 
 ## License
