@@ -320,6 +320,10 @@ function callHandlePushFile(engine: SyncEngine, file: TFile, result: SyncResult)
   return (engine as any).handlePushFile(file, result);
 }
 
+function callDiscoverNewDocs(engine: SyncEngine, result: SyncResult): Promise<void> {
+  return (engine as any).discoverNewDocs(result);
+}
+
 function freshResult(): SyncResult {
   return { pulled: 0, pushed: 0, conflicts: 0, errors: [] };
 }
@@ -1111,5 +1115,61 @@ describe("exception safety", () => {
     const addCalls = fw.addSyncWritePath.mock.calls.map((c: any[]) => c[0]);
     const removeCalls = fw.removeSyncWritePath.mock.calls.map((c: any[]) => c[0]);
     expect(addCalls).toEqual(removeCalls);
+  });
+});
+
+describe("discoverNewDocs", () => {
+  it("downloads docs not in docMap", async () => {
+    const { engine, plugin, apiClient } = buildEngine();
+
+    const doc1 = makeDoc({ sys_id: "new1", title: "New Doc", category: "kb_knowledge", project: "proj1" });
+    apiClient.getDocuments.mockResolvedValue({ ok: true, data: [doc1], status: 200 });
+
+    const result = freshResult();
+    await callDiscoverNewDocs(engine, result);
+
+    expect(result.pulled).toBe(1);
+    expect(plugin.syncState.docMap["new1"]).toBeDefined();
+  });
+
+  it("skips docs already in docMap", async () => {
+    const { engine, plugin, apiClient } = buildEngine();
+    plugin.syncState.docMap["existing1"] = {
+      sysId: "existing1", path: "Knowledge/existing.md",
+      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "hash",
+    };
+
+    const doc1 = makeDoc({ sys_id: "existing1", title: "Existing", category: "kb_knowledge" });
+    apiClient.getDocuments.mockResolvedValue({ ok: true, data: [doc1], status: 200 });
+
+    const result = freshResult();
+    await callDiscoverNewDocs(engine, result);
+
+    expect(result.pulled).toBe(0);
+  });
+
+  it("skips docs in ignoredIds", async () => {
+    const { engine, apiClient } = buildEngine({
+      stateOverrides: { ignoredIds: ["ignored1"] },
+    });
+
+    const doc1 = makeDoc({ sys_id: "ignored1", title: "Ignored", category: "kb_knowledge" });
+    apiClient.getDocuments.mockResolvedValue({ ok: true, data: [doc1], status: 200 });
+
+    const result = freshResult();
+    await callDiscoverNewDocs(engine, result);
+
+    expect(result.pulled).toBe(0);
+  });
+
+  it("handles API failure gracefully", async () => {
+    const { engine, apiClient } = buildEngine();
+    apiClient.getDocuments.mockResolvedValue({ ok: false, data: null, status: 500 });
+
+    const result = freshResult();
+    await callDiscoverNewDocs(engine, result);
+
+    expect(result.pulled).toBe(0);
+    expect(result.errors).toHaveLength(0);
   });
 });

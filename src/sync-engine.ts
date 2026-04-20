@@ -87,6 +87,7 @@ export class SyncEngine {
       await this.fileWatcher.flushPending();
       const pullTs = await this.pull(result);
       const pushTs = await this.push(result);
+      await this.discoverNewDocs(result);
       const serverTs = [pullTs, pushTs].filter(Boolean).sort().pop();
       if (serverTs) {
         this.plugin.syncState.lastSyncTimestamp = serverTs;
@@ -551,6 +552,28 @@ export class SyncEngine {
 
     this.skipPullSysIds.clear();
     return latestTs;
+  }
+
+  private async discoverNewDocs(result: SyncResult): Promise<void> {
+    const response = await this.apiClient.getDocuments();
+    if (!response.ok || !response.data) return;
+
+    const docs = Array.isArray(response.data) ? response.data : [response.data];
+    const docMap = this.plugin.syncState.docMap;
+    const ignoredIds = this.plugin.syncState.ignoredIds;
+
+    for (const doc of docs) {
+      if (docMap[doc.sys_id] || ignoredIds.includes(doc.sys_id)) continue;
+
+      try {
+        await this.createLocalFile(doc);
+        result.pulled++;
+        this.plugin.updateSyncProgress(result.pulled, result.pushed);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        result.errors.push(`Download error for ${doc.title}: ${sanitizeErrorMsg(msg)}`);
+      }
+    }
   }
 
   private async handlePushFile(file: TFile, result: SyncResult): Promise<string | null> {
