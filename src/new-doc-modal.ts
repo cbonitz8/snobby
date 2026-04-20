@@ -10,6 +10,7 @@ export interface NewDocResult {
 export class NewDocModal extends Modal {
   private result: NewDocResult;
   private metadata: SNMetadata;
+  private title: string;
   private onSubmit: (result: NewDocResult) => void;
   private onCancel: () => void;
   private submitted = false;
@@ -17,12 +18,14 @@ export class NewDocModal extends Modal {
   constructor(
     app: App,
     metadata: SNMetadata,
+    title: string,
     defaults: Partial<NewDocResult>,
     onSubmit: (result: NewDocResult) => void,
     onCancel: () => void
   ) {
     super(app);
     this.metadata = metadata;
+    this.title = title;
     this.result = {
       category: defaults.category ?? "",
       project: defaults.project ?? "",
@@ -35,6 +38,7 @@ export class NewDocModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.createEl("h2", { text: "New ServiceNow document" });
+    contentEl.createEl("p", { text: this.title, cls: "snobby-new-doc-title" });
 
     new Setting(contentEl)
       .setName("Category")
@@ -98,12 +102,14 @@ export class NewDocModal extends Modal {
 export function promptNewDocMetadata(
   app: App,
   metadata: SNMetadata,
+  title: string,
   defaults?: Partial<NewDocResult>
 ): Promise<NewDocResult | null> {
   return new Promise((resolve) => {
     const modal = new NewDocModal(
       app,
       metadata,
+      title,
       defaults ?? {},
       (result) => resolve(result),
       () => resolve(null)

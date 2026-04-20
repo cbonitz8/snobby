@@ -702,26 +702,24 @@ export class SyncEngine {
       let project = fm.project ?? "";
       let tags = fm.tags ?? "";
 
-      if (!category && !project) {
-        if (!this.cachedMetadata) {
-          const metaResponse = await this.apiClient.getMetadata();
-          if (metaResponse.ok && metaResponse.data) {
-            this.cachedMetadata = metaResponse.data;
-          }
+      if (!this.cachedMetadata) {
+        const metaResponse = await this.apiClient.getMetadata();
+        if (metaResponse.ok && metaResponse.data) {
+          this.cachedMetadata = metaResponse.data;
         }
-
-        const snMeta = this.cachedMetadata ?? { categories: [], projects: [], tags: [] };
-        const userInput = await promptNewDocMetadata(this.plugin.app, snMeta, {
-          category,
-          project,
-          tags,
-        });
-
-        if (!userInput) return null;
-        category = userInput.category;
-        project = userInput.project;
-        tags = userInput.tags;
       }
+
+      const snMeta = this.cachedMetadata ?? { categories: [], projects: [], tags: [] };
+      const userInput = await promptNewDocMetadata(this.plugin.app, snMeta, file.basename, {
+        category,
+        project,
+        tags,
+      });
+
+      if (!userInput) return null;
+      category = userInput.category;
+      project = userInput.project;
+      tags = userInput.tags;
 
       await this.ensureMetadata();
       const createResult = await this.apiClient.createDocument({

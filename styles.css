@@ -1,5 +1,11 @@
 /* sn-obsidian-sync styles */
 
+.snobby-new-doc-title {
+  font-weight: 600;
+  margin-top: 0;
+  color: var(--text-normal);
+}
+
 .sn-metadata-section {
   margin-bottom: 12px;
 }
