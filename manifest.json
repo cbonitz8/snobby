@@ -1,7 +1,7 @@
 {
   "id": "snobby",
   "name": "Snobby",
-  "version": "0.9.10",
+  "version": "0.9.11",
   "minAppVersion": "1.0.0",
   "description": "Bidirectional sync between your vault and a ServiceNow Scripted REST API.",
   "author": "Caleb Bonitz",

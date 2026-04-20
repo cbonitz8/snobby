@@ -140,15 +140,18 @@ export class ConflictResolver {
 
     const fm = this.plugin.frontmatterManager.read(file);
     this.plugin.fileWatcher.addSyncWritePath(conflict.path);
-    await this.plugin.app.vault.modify(file, conflict.remoteContent);
-    await this.plugin.frontmatterManager.write(file, {
-      sys_id: fm.sys_id ?? sysId,
-      category: fm.category,
-      project: fm.project,
-      tags: fm.tags,
-      synced: true,
-    });
-    this.plugin.fileWatcher.removeSyncWritePath(conflict.path);
+    try {
+      await this.plugin.app.vault.modify(file, conflict.remoteContent);
+      await this.plugin.frontmatterManager.write(file, {
+        sys_id: fm.sys_id ?? sysId,
+        category: fm.category,
+        project: fm.project,
+        tags: fm.tags,
+        synced: true,
+      });
+    } finally {
+      this.plugin.fileWatcher.removeSyncWritePath(conflict.path);
+    }
 
     const entry = this.plugin.syncState.docMap[sysId];
     if (entry) {
@@ -215,9 +218,12 @@ export class ConflictResolver {
     }
 
     this.plugin.fileWatcher.addSyncWritePath(conflict.path);
-    await this.plugin.app.vault.modify(file, newContent);
-    await this.plugin.frontmatterManager.markDirty(file);
-    this.plugin.fileWatcher.removeSyncWritePath(conflict.path);
+    try {
+      await this.plugin.app.vault.modify(file, newContent);
+      await this.plugin.frontmatterManager.markDirty(file);
+    } finally {
+      this.plugin.fileWatcher.removeSyncWritePath(conflict.path);
+    }
 
     await this.baseCache.saveBase(sysId, mergedBody);
 
@@ -265,9 +271,12 @@ export class ConflictResolver {
     }
 
     this.plugin.fileWatcher.addSyncWritePath(conflict.path);
-    await this.plugin.app.vault.modify(file, newContent);
-    await this.plugin.frontmatterManager.markDirty(file);
-    this.plugin.fileWatcher.removeSyncWritePath(conflict.path);
+    try {
+      await this.plugin.app.vault.modify(file, newContent);
+      await this.plugin.frontmatterManager.markDirty(file);
+    } finally {
+      this.plugin.fileWatcher.removeSyncWritePath(conflict.path);
+    }
 
     await this.baseCache.saveBase(sysId, mergedBody);
 
@@ -307,8 +316,11 @@ export class ConflictResolver {
       if (localBody === remoteBody) {
         delete this.plugin.syncState.conflicts[sysId];
         this.plugin.fileWatcher.addSyncWritePath(conflict.path);
-        await this.plugin.frontmatterManager.markSynced(file);
-        this.plugin.fileWatcher.removeSyncWritePath(conflict.path);
+        try {
+          await this.plugin.frontmatterManager.markSynced(file);
+        } finally {
+          this.plugin.fileWatcher.removeSyncWritePath(conflict.path);
+        }
         cleared++;
       }
     }
@@ -345,8 +357,11 @@ export class ConflictResolver {
 
       const cleaned = stripConflictMarkers(content);
       this.plugin.fileWatcher.addSyncWritePath(file.path);
-      await this.plugin.app.vault.modify(file, cleaned);
-      this.plugin.fileWatcher.removeSyncWritePath(file.path);
+      try {
+        await this.plugin.app.vault.modify(file, cleaned);
+      } finally {
+        this.plugin.fileWatcher.removeSyncWritePath(file.path);
+      }
       migrated++;
     }
 

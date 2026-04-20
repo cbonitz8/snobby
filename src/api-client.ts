@@ -1,5 +1,5 @@
 import type { AuthManager } from "./auth-manager";
-import type { SNDocument, SNMetadata, CreateDocumentPayload, UpdateDocumentPayload } from "./types";
+import type { SNDocument, SNMetadata, SNUserInfo, CreateDocumentPayload, UpdateDocumentPayload } from "./types";
 
 interface ApiResponse<T> {
   ok: boolean;
@@ -84,6 +84,10 @@ export class ApiClient {
 
   async deleteDocument(id: string): Promise<ApiResponse<void>> {
     return this.request<void>("DELETE", `/documents/${encodeURIComponent(id)}`);
+  }
+
+  async getUser(sysId: string): Promise<ApiResponse<SNUserInfo>> {
+    return this.request<SNUserInfo>("GET", `/user/${encodeURIComponent(sysId)}`);
   }
 
   async getMetadata(): Promise<ApiResponse<SNMetadata>> {

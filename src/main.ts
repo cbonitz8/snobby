@@ -212,6 +212,18 @@ export default class SNSyncPlugin extends Plugin {
   async loadSettings() {
     const data: Partial<PluginData> = (await this.loadData()) ?? {};
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data.settings);
+
+    // Migrate legacy username → userSysId
+    if (!this.settings.userSysId && data.settings) {
+      const legacyUsername = (data.settings as unknown as Record<string, unknown>).username;
+      if (typeof legacyUsername === "string" && legacyUsername) {
+        if (/^[a-f0-9]{32}$/i.test(legacyUsername)) {
+          this.settings.userSysId = legacyUsername;
+        }
+      }
+    }
+    delete (this.settings as unknown as Record<string, unknown>).username;
+
     this.syncState = Object.assign({}, DEFAULT_SYNC_STATE, data.syncState);
     this.syncState.ignoredIds = [...new Set(this.syncState.ignoredIds)];
 

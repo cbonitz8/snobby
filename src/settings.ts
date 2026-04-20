@@ -33,7 +33,8 @@ export const DEFAULT_SETTINGS: SNSyncSettings = {
   remoteDeleteBehavior: "delete local",
   folderMapping: DEFAULT_FOLDER_MAPPING,
   excludePaths: [],
-  username: "",
+  userSysId: "",
+  userDisplayName: "",
   vaultName: "",
   vaultPath: "",
 };
@@ -77,6 +78,7 @@ export class SNSyncSettingTab extends PluginSettingTab {
       ["PUT", "/documents/{id}", "Update document"],
       ["DELETE", "/documents/{id}", "Delete document"],
       ["GET", "/documents/changes?since={ts}", "Get changes since timestamp"],
+      ["GET", "/user/{sys_id}", "Resolve user sys_id to display name"],
       ["GET", "{metadataPath}", "Get categories, projects, tags"],
     ];
     const thead = routeTable.createEl("thead");
@@ -192,17 +194,28 @@ export class SNSyncSettingTab extends PluginSettingTab {
         })
       );
 
-    new Setting(containerEl)
-      .setName("Your ServiceNow display name")
-      .setDesc("Used to identify which locks are yours. Must match your SN display name.")
-      .addText((text) =>
+    const userSetting = new Setting(containerEl)
+      .setName("Your ServiceNow user sys_id")
+      .setDesc(
+        this.plugin.settings.userDisplayName
+          ? `Resolved: ${this.plugin.settings.userDisplayName}`
+          : "Paste your sys_user sys_id. Click Lookup to verify."
+      )
+      .addText((text) => {
         text
-          .setPlaceholder("e.g. Caleb Bonitz")
-          .setValue(this.plugin.settings.username)
+          .setPlaceholder("e.g. 06cf40236f0c35002b319f5e5d3ee4c4")
+          .setValue(this.plugin.settings.userSysId)
           .onChange(async (value) => {
-            this.plugin.settings.username = value;
-            await this.plugin.saveSettings();
-          })
+            this.plugin.settings.userSysId = value.trim();
+          });
+        text.inputEl.addEventListener("blur", () => {
+          void this.resolveUserSysId(userSetting);
+        });
+      })
+      .addButton((button) =>
+        button.setButtonText("Lookup").onClick(async () => {
+          await this.resolveUserSysId(userSetting);
+        })
       );
 
     new Setting(containerEl)
@@ -381,5 +394,37 @@ export class SNSyncSettingTab extends PluginSettingTab {
           })
       );
 
+  }
+
+  private async resolveUserSysId(setting: Setting): Promise<void> {
+    const sysId = this.plugin.settings.userSysId.trim();
+    if (!sysId) {
+      this.plugin.settings.userDisplayName = "";
+      await this.plugin.saveSettings();
+      setting.setDesc("Paste your sys_user sys_id. Click Lookup to verify.");
+      return;
+    }
+    if (!/^[a-f0-9]{32}$/i.test(sysId)) {
+      new Notice("Invalid sys_id format. Must be a 32-character hex string.");
+      setting.setDesc("Invalid sys_id format.");
+      return;
+    }
+    setting.setDesc("Looking up user...");
+    try {
+      const response = await this.plugin.apiClient.getUser(sysId);
+      if (!response.ok || !response.data) {
+        new Notice(`User lookup failed (HTTP ${response.status}). Check the sys_id and try again.`);
+        setting.setDesc("Lookup failed. Check the sys_id.");
+        return;
+      }
+      this.plugin.settings.userSysId = sysId;
+      this.plugin.settings.userDisplayName = response.data.name;
+      await this.plugin.saveSettings();
+      setting.setDesc(`Resolved: ${response.data.name} (${response.data.user_name})`);
+    } catch (e) {
+      console.error("Snobby: user lookup error", e);
+      new Notice("User lookup failed. Are you authenticated?");
+      setting.setDesc("Lookup error. Check connection.");
+    }
   }
 }

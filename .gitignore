@@ -2,7 +2,10 @@ node_modules/
 main.js
 *.js.map
 data.json
+.DS_Store
 .superpowers/
 .worktrees/
 docs/
 CLAUDE.md
+_path_sync-cycle.md
+builder_prompt.md

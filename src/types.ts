@@ -15,6 +15,12 @@ export interface SNMetadata {
   tags: string[];
 }
 
+export interface SNUserInfo {
+  sys_id: string;
+  name: string;
+  user_name: string;
+}
+
 export interface DocMapEntry {
   sysId: string;
   path: string;
@@ -94,7 +100,8 @@ export interface SNSyncSettings {
   remoteDeleteBehavior: RemoteDeleteBehavior;
   folderMapping: FolderMapping;
   excludePaths: string[];
-  username: string;
+  userSysId: string;
+  userDisplayName: string;
   vaultName: string;
   vaultPath: string;
 }

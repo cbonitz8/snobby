@@ -200,8 +200,11 @@ export class SyncEngine {
         const file = this.plugin.app.vault.getAbstractFileByPath(entry.path);
         if (file instanceof TFile) {
           this.fileWatcher.addSyncWritePath(entry.path);
-          await this.plugin.app.fileManager.trashFile(file);
-          this.fileWatcher.removeSyncWritePath(entry.path);
+          try {
+            await this.plugin.app.fileManager.trashFile(file);
+          } finally {
+            this.fileWatcher.removeSyncWritePath(entry.path);
+          }
           deleted++;
         }
       }
@@ -276,11 +279,14 @@ export class SyncEngine {
           }
 
           this.fileWatcher.addSyncWritePath(file.path);
-          await this.frontmatterManager.write(file, {
-            sys_id: newDoc.sys_id,
-            synced: true,
-          });
-          this.fileWatcher.removeSyncWritePath(file.path);
+          try {
+            await this.frontmatterManager.write(file, {
+              sys_id: newDoc.sys_id,
+              synced: true,
+            });
+          } finally {
+            this.fileWatcher.removeSyncWritePath(file.path);
+          }
 
           this.plugin.syncState.docMap[newDoc.sys_id] = {
             sysId: newDoc.sys_id,
@@ -363,8 +369,11 @@ export class SyncEngine {
           }
 
           this.fileWatcher.addSyncWritePath(file.path);
-          await this.frontmatterManager.markSynced(file);
-          this.fileWatcher.removeSyncWritePath(file.path);
+          try {
+            await this.frontmatterManager.markSynced(file);
+          } finally {
+            this.fileWatcher.removeSyncWritePath(file.path);
+          }
 
           result.pushed++;
 
@@ -458,7 +467,8 @@ export class SyncEngine {
         if (!localDirty && baseBody === null) {
           // No base to compare — re-read file to check synced flag directly
           const raw = await this.plugin.app.vault.read(file);
-          const syncedMatch = raw.match(/sn_synced:\s*(true|false|"true"|"false")/);
+          const pfx = this.plugin.settings.frontmatterPrefix;
+          const syncedMatch = raw.match(new RegExp(`${pfx}synced:\\s*(true|false|"true"|"false")`));
           if (syncedMatch && (syncedMatch[1] === "false" || syncedMatch[1] === '"false"')) {
             localDirty = true;
           }
@@ -474,10 +484,13 @@ export class SyncEngine {
           if (!mergeResult.hasConflicts) {
             // Auto-merge succeeded
             this.fileWatcher.addSyncWritePath(file.path);
-            const merged = await this.rebuildWithFrontmatter(file, mergeResult.mergedBody);
-            await this.plugin.app.vault.modify(file, merged);
-            await this.frontmatterManager.write(file, { ...fm, synced: false });
-            this.fileWatcher.removeSyncWritePath(file.path);
+            try {
+              const merged = await this.rebuildWithFrontmatter(file, mergeResult.mergedBody);
+              await this.plugin.app.vault.modify(file, merged);
+              await this.frontmatterManager.write(file, { ...fm, synced: false });
+            } finally {
+              this.fileWatcher.removeSyncWritePath(file.path);
+            }
             await this.baseCache.saveBase(doc.sys_id, mergeResult.mergedBody);
             mapEntry.lastServerTimestamp = doc.sys_updated_on;
             mapEntry.contentHash = doc.content_hash ?? "";
@@ -495,15 +508,18 @@ export class SyncEngine {
         } else {
           // Local is clean — overwrite with remote
           this.fileWatcher.addSyncWritePath(file.path);
-          await this.plugin.app.vault.modify(file, doc.content);
-          await this.frontmatterManager.write(file, {
-            sys_id: fm.sys_id,
-            category: fm.category,
-            project: fm.project,
-            tags: fm.tags,
-            synced: true,
-          });
-          this.fileWatcher.removeSyncWritePath(file.path);
+          try {
+            await this.plugin.app.vault.modify(file, doc.content);
+            await this.frontmatterManager.write(file, {
+              sys_id: fm.sys_id,
+              category: fm.category,
+              project: fm.project,
+              tags: fm.tags,
+              synced: true,
+            });
+          } finally {
+            this.fileWatcher.removeSyncWritePath(file.path);
+          }
           await this.baseCache.saveBase(doc.sys_id, stripFrontmatter(doc.content));
           mapEntry.lastServerTimestamp = doc.sys_updated_on;
           mapEntry.contentHash = doc.content_hash ?? "";
@@ -564,8 +580,11 @@ export class SyncEngine {
             if (remoteBody === localBody) {
               // Content converged — no real conflict
               this.fileWatcher.addSyncWritePath(file.path);
-              await this.frontmatterManager.markSynced(file);
-              this.fileWatcher.removeSyncWritePath(file.path);
+              try {
+                await this.frontmatterManager.markSynced(file);
+              } finally {
+                this.fileWatcher.removeSyncWritePath(file.path);
+              }
               if (conflictData.content_hash && mapEntry) {
                 mapEntry.contentHash = conflictData.content_hash;
               }
@@ -585,10 +604,13 @@ export class SyncEngine {
               if (!mergeResult.hasConflicts) {
                 // Auto-merge succeeded — write merged, will re-push next cycle
                 this.fileWatcher.addSyncWritePath(file.path);
-                const merged = await this.rebuildWithFrontmatter(file, mergeResult.mergedBody);
-                await this.plugin.app.vault.modify(file, merged);
-                await this.frontmatterManager.markDirty(file);
-                this.fileWatcher.removeSyncWritePath(file.path);
+                try {
+                  const merged = await this.rebuildWithFrontmatter(file, mergeResult.mergedBody);
+                  await this.plugin.app.vault.modify(file, merged);
+                  await this.frontmatterManager.markDirty(file);
+                } finally {
+                  this.fileWatcher.removeSyncWritePath(file.path);
+                }
                 await this.baseCache.saveBase(fm.sys_id, mergeResult.mergedBody);
                 if (conflictData.content_hash && mapEntry) {
                   mapEntry.contentHash = conflictData.content_hash;
@@ -614,8 +636,11 @@ export class SyncEngine {
 
               if (remoteBody === localBody) {
                 this.fileWatcher.addSyncWritePath(file.path);
-                await this.frontmatterManager.markSynced(file);
-                this.fileWatcher.removeSyncWritePath(file.path);
+                try {
+                  await this.frontmatterManager.markSynced(file);
+                } finally {
+                  this.fileWatcher.removeSyncWritePath(file.path);
+                }
                 await this.baseCache.saveBase(fm.sys_id, localBody);
                 result.pushed++;
               } else {
@@ -627,10 +652,13 @@ export class SyncEngine {
 
                 if (!mergeResult.hasConflicts) {
                   this.fileWatcher.addSyncWritePath(file.path);
-                  const merged = await this.rebuildWithFrontmatter(file, mergeResult.mergedBody);
-                  await this.plugin.app.vault.modify(file, merged);
-                  await this.frontmatterManager.markDirty(file);
-                  this.fileWatcher.removeSyncWritePath(file.path);
+                  try {
+                    const merged = await this.rebuildWithFrontmatter(file, mergeResult.mergedBody);
+                    await this.plugin.app.vault.modify(file, merged);
+                    await this.frontmatterManager.markDirty(file);
+                  } finally {
+                    this.fileWatcher.removeSyncWritePath(file.path);
+                  }
                   await this.baseCache.saveBase(fm.sys_id, mergeResult.mergedBody);
                 } else {
                   this.conflictResolver.applyConflict({
@@ -652,8 +680,11 @@ export class SyncEngine {
       }
 
       this.fileWatcher.addSyncWritePath(file.path);
-      await this.frontmatterManager.markSynced(file);
-      this.fileWatcher.removeSyncWritePath(file.path);
+      try {
+        await this.frontmatterManager.markSynced(file);
+      } finally {
+        this.fileWatcher.removeSyncWritePath(file.path);
+      }
 
       const entry = this.plugin.syncState.docMap[fm.sys_id];
       if (entry && updateResult.data) {
@@ -709,14 +740,17 @@ export class SyncEngine {
       const newDoc = createResult.data;
 
       this.fileWatcher.addSyncWritePath(file.path);
-      await this.frontmatterManager.write(file, {
-        sys_id: newDoc.sys_id,
-        category: newDoc.category,
-        project: newDoc.project,
-        tags: newDoc.tags,
-        synced: true,
-      });
-      this.fileWatcher.removeSyncWritePath(file.path);
+      try {
+        await this.frontmatterManager.write(file, {
+          sys_id: newDoc.sys_id,
+          category: newDoc.category,
+          project: newDoc.project,
+          tags: newDoc.tags,
+          synced: true,
+        });
+      } finally {
+        this.fileWatcher.removeSyncWritePath(file.path);
+      }
 
       this.plugin.syncState.docMap[newDoc.sys_id] = {
         sysId: newDoc.sys_id,
@@ -791,19 +825,22 @@ export class SyncEngine {
     }
 
     this.fileWatcher.addSyncWritePath(finalPath);
-    await this.plugin.app.vault.create(finalPath, doc.content);
+    try {
+      await this.plugin.app.vault.create(finalPath, doc.content);
 
-    const createdFile = this.plugin.app.vault.getAbstractFileByPath(finalPath);
-    if (createdFile instanceof TFile) {
-      await this.frontmatterManager.write(createdFile, {
-        sys_id: doc.sys_id,
-        category: doc.category,
-        project: doc.project,
-        tags: doc.tags,
-        synced: true,
-      });
+      const createdFile = this.plugin.app.vault.getAbstractFileByPath(finalPath);
+      if (createdFile instanceof TFile) {
+        await this.frontmatterManager.write(createdFile, {
+          sys_id: doc.sys_id,
+          category: doc.category,
+          project: doc.project,
+          tags: doc.tags,
+          synced: true,
+        });
+      }
+    } finally {
+      this.fileWatcher.removeSyncWritePath(finalPath);
     }
-    this.fileWatcher.removeSyncWritePath(finalPath);
 
     this.plugin.syncState.docMap[doc.sys_id] = {
       sysId: doc.sys_id,
