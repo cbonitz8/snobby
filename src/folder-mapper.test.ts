@@ -71,6 +71,21 @@ describe("resolveFilePath", () => {
     const result = resolveFilePath(MAPPING, "Acme Portal Overview", "Acme Portal", "project_overview", "");
     expect(result).toBe("Acme Portal/Project Overviews/Acme Portal Overview.md");
   });
+
+  it("uses metadata label for unmapped category", () => {
+    const result = resolveFilePath(MAPPING, "My Story", "Story Time", "story_time", "", "Story Time");
+    expect(result).toBe("Story Time/Story Time/My Story.md");
+  });
+
+  it("title-cases unmapped category when no label provided", () => {
+    const result = resolveFilePath(MAPPING, "My Story", "", "story_time", "");
+    expect(result).toBe("Story Time/My Story.md");
+  });
+
+  it("title-cases multi-word unmapped category", () => {
+    const result = resolveFilePath(MAPPING, "Doc", "", "team_retrospective", "");
+    expect(result).toBe("Team Retrospective/Doc.md");
+  });
 });
 
 describe("sanitizeTitle", () => {

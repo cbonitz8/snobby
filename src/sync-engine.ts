@@ -814,8 +814,9 @@ export class SyncEngine {
       projectLabel = "Uncategorized";
     }
 
+    const categoryLabel = this.resolveLabel("categories", category);
     const filePath = normalizePath(
-      resolveFilePath(folderMapping, doc.title ?? "Untitled", projectLabel, category, "")
+      resolveFilePath(folderMapping, doc.title ?? "Untitled", projectLabel, category, "", categoryLabel)
     );
 
     const finalPath = this.resolveCollision(filePath, doc.sys_id);

@@ -5,7 +5,8 @@ export function resolveFilePath(
   title: string,
   project: string,
   category: string,
-  tag: string
+  tag: string,
+  categoryLabel?: string
 ): string {
   const filename = `${sanitizeTitle(title)}.md`;
 
@@ -31,10 +32,21 @@ export function resolveFilePath(
       parts.push(catMapping.root);
       parts.push(catMapping.subfolders[0] ?? "");
     }
+  } else if (category) {
+    // Unmapped category: use metadata label if available, otherwise title-case the value
+    parts.push(categoryLabel || toTitleCase(category));
   }
 
   parts.push(filename);
   return parts.filter((p) => p.length > 0).join("/");
+}
+
+/** Convert snake_case to Title Case (e.g. "story_time" → "Story Time") */
+function toTitleCase(value: string): string {
+  return value
+    .split("_")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
 }
 
 export function isTopLevelCategory(mapping: FolderMapping, category: string): boolean {
