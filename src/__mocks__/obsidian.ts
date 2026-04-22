@@ -7,7 +7,9 @@ export class Modal {}
 export class ItemView {}
 export class PluginSettingTab {}
 export class Setting {}
-export class TFile {}
+export class TFile {
+  stat = { mtime: 0, ctime: 0, size: 0 };
+}
 
 export function normalizePath(path: string) {
   return path;

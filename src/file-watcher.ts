@@ -11,7 +11,6 @@ export class FileWatcher {
   private apiClient: ApiClient;
   private debounceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private syncWritePaths: Set<string> = new Set();
-  private knownDirtyPaths: Set<string> = new Set();
 
   constructor(plugin: SNSyncPlugin, frontmatterManager: FrontmatterManager, apiClient: ApiClient) {
     this.plugin = plugin;
@@ -41,7 +40,6 @@ export class FileWatcher {
 
   addSyncWritePath(path: string) {
     this.syncWritePaths.add(path);
-    this.knownDirtyPaths.delete(path);
   }
 
   removeSyncWritePath(path: string) {
@@ -79,14 +77,15 @@ export class FileWatcher {
 
   private async handleFileModified(file: TFile) {
     const fm = this.frontmatterManager.read(file);
-
-    if (fm.synced === false) {
-      this.knownDirtyPaths.add(file.path);
-      return;
+    // Cosmetic: flip sn_synced to false so the user sees it's modified
+    if (fm.sys_id && fm.synced !== false) {
+      this.syncWritePaths.add(file.path);
+      try {
+        await this.frontmatterManager.markDirty(file);
+      } finally {
+        this.syncWritePaths.delete(file.path);
+      }
     }
-
-    this.knownDirtyPaths.add(file.path);
-    await this.frontmatterManager.markDirty(file);
   }
 
   private async onDelete(file: TFile) {
@@ -142,21 +141,5 @@ export class FileWatcher {
         await this.handleFileModified(file);
       }
     }
-  }
-
-  getDirtyFiles(): TFile[] {
-    const allFiles = this.plugin.app.vault.getMarkdownFiles();
-    const dirtyFiles: TFile[] = [];
-
-    for (const file of allFiles) {
-      if (this.isExcluded(file.path)) continue;
-      const fm = this.frontmatterManager.read(file);
-      if (fm.synced === false || this.knownDirtyPaths.has(file.path)) {
-        dirtyFiles.push(file);
-      }
-    }
-
-    this.knownDirtyPaths.clear();
-    return dirtyFiles;
   }
 }
