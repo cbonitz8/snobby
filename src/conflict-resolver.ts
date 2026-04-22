@@ -7,6 +7,7 @@ import { parseSections, serializeSections } from "./section-parser";
 import { mergeSections } from "./section-merger";
 import { computeDiff, assembleDiffWithLineChoices } from "./diff";
 import { contentHash } from "./content-hash";
+import { computeLocalHash } from "./sync-engine";
 
 const MARKER_LOCAL = "<<<<<<< Local (Obsidian)";
 const MARKER_SEPARATOR = "=======";
@@ -156,6 +157,10 @@ export class ConflictResolver {
     const entry = this.plugin.syncState.docMap[sysId];
     if (entry) {
       entry.lastServerTimestamp = conflict.remoteTimestamp;
+      entry.localContentHash = await computeLocalHash(
+        this.plugin.app.vault, this.plugin.settings.frontmatterPrefix, file
+      );
+      entry.lastSyncMtime = file.stat.mtime;
     }
 
     await this.baseCache.saveBase(sysId, stripFrontmatter(conflict.remoteContent));

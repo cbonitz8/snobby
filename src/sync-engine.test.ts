@@ -1,8 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi } from "vitest";
 import { TFile } from "obsidian";
-import { SyncEngine } from "./sync-engine";
+import { SyncEngine, computeLocalHash } from "./sync-engine";
 import { stripFrontmatter } from "./frontmatter-manager";
+import { md5Hash } from "./content-hash";
 import type {
   SNDocument,
   SNFrontmatter,
@@ -87,12 +88,13 @@ function makeDoc(overrides: Partial<SNDocument> = {}): SNDocument {
   };
 }
 
-function makeTFile(path: string, basename?: string): TFile {
+function makeTFile(path: string, basename?: string, mtime?: number): TFile {
   const file = new TFile();
   (file as any).path = path;
   (file as any).name = path.split("/").pop() ?? path;
   (file as any).basename = basename ?? (file as any).name.replace(/\.md$/, "");
   (file as any).extension = "md";
+  file.stat.mtime = mtime ?? Date.now();
   return file;
 }
 
@@ -123,6 +125,7 @@ function makeVault() {
 
     modify: vi.fn(async (file: TFile, content: string) => {
       files.set((file as any).path, content);
+      file.stat.mtime = Date.now();
     }),
 
     create: vi.fn(async (path: string, content: string) => {
@@ -242,6 +245,7 @@ function makeFileWatcher(dirtyFiles: TFile[] = []) {
     addSyncWritePath: vi.fn(),
     removeSyncWritePath: vi.fn(),
     getDirtyFiles: vi.fn(() => dirtyFiles),
+    isExcluded: vi.fn(() => false),
     flushPending: vi.fn().mockResolvedValue(undefined),
   };
 }
@@ -332,22 +336,22 @@ function freshResult(): SyncResult {
 // TESTS
 // ==========================================================================
 
-describe("handlePulledDoc — content unchanged", () => {
-  it("updates mapEntry timestamps when remote bumps but content is identical", async () => {
+describe("handlePulledDoc — server hash unchanged", () => {
+  it("updates mapEntry timestamp when server hash matches stored hash", async () => {
     const { engine, plugin } = buildEngine();
-    const file = plugin.app.vault.addFile("Knowledge/doc.md", "Hello world");
+    plugin.app.vault.addFile("Knowledge/doc.md", "Hello world");
     plugin.syncState.docMap["doc1"] = {
       sysId: "doc1",
       path: "Knowledge/doc.md",
       lastServerTimestamp: "2026-01-01 00:00:00",
-      contentHash: "oldhash",
+      contentHash: "samehash",
+      localContentHash: md5Hash("Hello world"),
     };
-    const doc = makeDoc({ content: "Hello world", sys_updated_on: "2026-01-05 00:00:00", content_hash: "newhash" });
+    const doc = makeDoc({ content: "Hello world", sys_updated_on: "2026-01-05 00:00:00", content_hash: "samehash" });
     const result = freshResult();
     await callHandlePulledDoc(engine, doc, result);
 
     expect(plugin.syncState.docMap["doc1"]!.lastServerTimestamp).toBe("2026-01-05 00:00:00");
-    expect(plugin.syncState.docMap["doc1"]!.contentHash).toBe("newhash");
   });
 
   it("does not increment result.pulled", async () => {
@@ -355,42 +359,28 @@ describe("handlePulledDoc — content unchanged", () => {
     plugin.app.vault.addFile("Knowledge/doc.md", "Hello world");
     plugin.syncState.docMap["doc1"] = {
       sysId: "doc1", path: "Knowledge/doc.md",
-      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "oldhash",
+      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "samehash",
     };
-    const doc = makeDoc({ content: "Hello world", sys_updated_on: "2026-01-05 00:00:00" });
+    const doc = makeDoc({ content: "Hello world", sys_updated_on: "2026-01-05 00:00:00", content_hash: "samehash" });
     const result = freshResult();
     await callHandlePulledDoc(engine, doc, result);
 
     expect(result.pulled).toBe(0);
   });
 
-  it("does not update base cache", async () => {
-    const { engine, plugin, bc } = buildEngine();
+  it("does not update base cache or engage syncWritePaths", async () => {
+    const { engine, plugin, bc, fw } = buildEngine();
     plugin.app.vault.addFile("Knowledge/doc.md", "Hello world");
     plugin.syncState.docMap["doc1"] = {
       sysId: "doc1", path: "Knowledge/doc.md",
-      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "oldhash",
+      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "samehash",
     };
-    const doc = makeDoc({ content: "Hello world" });
+    const doc = makeDoc({ content: "Hello world", content_hash: "samehash" });
     const result = freshResult();
     await callHandlePulledDoc(engine, doc, result);
 
     expect(bc.saveBase).not.toHaveBeenCalled();
-  });
-
-  it("does not engage syncWritePaths", async () => {
-    const { engine, plugin, fw } = buildEngine();
-    plugin.app.vault.addFile("Knowledge/doc.md", "Hello world");
-    plugin.syncState.docMap["doc1"] = {
-      sysId: "doc1", path: "Knowledge/doc.md",
-      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "oldhash",
-    };
-    const doc = makeDoc({ content: "Hello world" });
-    const result = freshResult();
-    await callHandlePulledDoc(engine, doc, result);
-
     expect(fw.addSyncWritePath).not.toHaveBeenCalled();
-    expect(fw.removeSyncWritePath).not.toHaveBeenCalled();
   });
 });
 
@@ -403,6 +393,7 @@ describe("handlePulledDoc — content changed, local clean", () => {
     plugin.syncState.docMap["doc1"] = {
       sysId: "doc1", path: "Knowledge/doc.md",
       lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "oldhash",
+      localContentHash: md5Hash("Old content"),
     };
     return { ...ctx, file };
   }
@@ -472,6 +463,7 @@ describe("handlePulledDoc — content changed, local dirty, merge succeeds", () 
     plugin.syncState.docMap["doc1"] = {
       sysId: "doc1", path: "Knowledge/doc.md",
       lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "oldhash",
+      localContentHash: md5Hash(baseContent), // hash of content at last sync — differs from current file
     };
     if (useBase) {
       bc._store.set("doc1", baseContent);
@@ -519,20 +511,18 @@ describe("handlePulledDoc — content changed, local dirty, merge succeeds", () 
 
   it("works with null base cache (two-way fallback)", async () => {
     // Two-way merge (null base) can only cleanly merge when sections are unique to one side.
-    // Set up: shared Section A (identical), local-only Section B, remote-only Section C
     const sharedSection = "### Section A\n\nShared content\n";
     const localOnly = sharedSection + "\n### Section B\n\nLocal-only section\n";
     const remoteOnly = sharedSection + "\n### Section C\n\nRemote-only section\n";
 
     const ctx = buildEngine();
-    const { engine, plugin, fm, bc } = ctx;
-    // Set raw file with frontmatter so re-read detects dirty
-    plugin.app.vault.addFile("Knowledge/doc.md", "---\nsn_synced: false\n---\n" + localOnly);
-    // fm.synced is undefined to trigger the re-read path
+    const { engine, plugin, fm } = ctx;
+    plugin.app.vault.addFile("Knowledge/doc.md", localOnly);
     fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge" });
     plugin.syncState.docMap["doc1"] = {
       sysId: "doc1", path: "Knowledge/doc.md",
       lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "oldhash",
+      localContentHash: md5Hash(sharedSection), // hash at last sync differs from current
     };
     // No base cache (null)
 
@@ -540,7 +530,6 @@ describe("handlePulledDoc — content changed, local dirty, merge succeeds", () 
     const result = freshResult();
     await callHandlePulledDoc(engine, doc, result);
 
-    // Two-way merge: Section A unchanged, Section B kept (local-only), Section C accepted (remote-only)
     expect(plugin.app.vault.modify).toHaveBeenCalled();
     expect(result.pulled).toBe(1);
   });
@@ -550,7 +539,6 @@ describe("handlePulledDoc — content changed, local dirty, merge conflicts", ()
   function setup() {
     const ctx = buildEngine();
     const { plugin, fm, bc } = ctx;
-    // Both sides changed the same section differently from base
     const base = "### Section A\n\nOriginal A content\n";
     const local = "### Section A\n\nLocal changed A content\n";
     plugin.app.vault.addFile("Knowledge/doc.md", local);
@@ -558,6 +546,7 @@ describe("handlePulledDoc — content changed, local dirty, merge conflicts", ()
     plugin.syncState.docMap["doc1"] = {
       sysId: "doc1", path: "Knowledge/doc.md",
       lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "oldhash",
+      localContentHash: md5Hash(base), // hash at last sync — differs from current local
     };
     bc._store.set("doc1", base);
     return ctx;
@@ -606,85 +595,64 @@ describe("handlePulledDoc — content changed, local dirty, merge conflicts", ()
   });
 });
 
-describe("handlePulledDoc — metadata cache race fallback", () => {
-  it("re-reads raw file when fm.synced is undefined and baseBody is null", async () => {
-    const { engine, plugin, fm } = buildEngine();
-    plugin.app.vault.addFile("Knowledge/doc.md", "---\nsn_synced: false\n---\nLocal content");
-    // fm.synced is undefined (metadata cache stale)
+describe("handlePulledDoc — legacy entry fallback (no localContentHash)", () => {
+  it("detects local changes via base cache when localContentHash is undefined", async () => {
+    const { engine, plugin, fm, bc } = buildEngine();
+    plugin.app.vault.addFile("Knowledge/doc.md", "Local changed content");
     fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge" });
     plugin.syncState.docMap["doc1"] = {
       sysId: "doc1", path: "Knowledge/doc.md",
       lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "oldhash",
+      // No localContentHash — legacy entry
     };
-    // No base cache
+    bc._store.set("doc1", "Original base content");
 
     const doc = makeDoc({ content: "Remote content" });
     const result = freshResult();
     await callHandlePulledDoc(engine, doc, result);
 
-    // vault.read should have been called to check raw content (at least twice:
-    // once for getBodyContent and once for the fallback re-read)
-    expect(plugin.app.vault.read.mock.calls.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("detects sn_synced: false from raw content", async () => {
-    const { engine, plugin, fm } = buildEngine();
-    plugin.app.vault.addFile("Knowledge/doc.md", "---\nsn_synced: false\n---\nLocal content");
-    fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge" });
-    plugin.syncState.docMap["doc1"] = {
-      sysId: "doc1", path: "Knowledge/doc.md",
-      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "oldhash",
-    };
-
-    const doc = makeDoc({ content: "Remote content" });
-    const result = freshResult();
-    await callHandlePulledDoc(engine, doc, result);
-
-    // localDirty should have been detected — merge path taken (modify or conflict)
-    // Since there's no base, it's a two-way merge. Check that it went through the dirty path:
-    // either vault.modify was called (merge success) or applyConflict (conflict)
+    // local body !== base body → localChanged → merge/conflict path
     const modifyCalled = plugin.app.vault.modify.mock.calls.length > 0;
     const conflictCalled = (engine as any).conflictResolver.applyConflict.mock.calls.length > 0;
     expect(modifyCalled || conflictCalled).toBe(true);
   });
 
-  it("detects sn_synced: \"false\" (quoted) from raw content", async () => {
-    const { engine, plugin, fm, cr } = buildEngine();
-    plugin.app.vault.addFile("Knowledge/doc.md", '---\nsn_synced: "false"\n---\nLocal content');
+  it("treats as clean when localContentHash undefined and base matches local", async () => {
+    const { engine, plugin, fm, bc } = buildEngine();
+    plugin.app.vault.addFile("Knowledge/doc.md", "Same content");
     fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge" });
     plugin.syncState.docMap["doc1"] = {
       sysId: "doc1", path: "Knowledge/doc.md",
       lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "oldhash",
     };
+    bc._store.set("doc1", "Same content");
 
     const doc = makeDoc({ content: "Remote content" });
     const result = freshResult();
     await callHandlePulledDoc(engine, doc, result);
 
-    // Should detect dirty and take merge/conflict path
-    const modifyCalled = plugin.app.vault.modify.mock.calls.length > 0;
-    const conflictCalled = cr.applyConflict.mock.calls.length > 0;
-    expect(modifyCalled || conflictCalled).toBe(true);
+    // local body === base body → clean → overwrite with remote
+    expect(plugin.app.vault.modify).toHaveBeenCalled();
+    expect(result.pulled).toBe(1);
   });
 
-  it("uses configured prefix (not hardcoded 'sn_') — test with custom prefix 'snow_'", async () => {
-    const ctx = buildEngine({ settingsOverrides: { frontmatterPrefix: "snow_" } });
-    const { engine, plugin, fm } = ctx;
-    plugin.app.vault.addFile("Knowledge/doc.md", "---\nsnow_synced: false\n---\nLocal content");
+  it("treats as clean when localContentHash undefined and no base cache", async () => {
+    const { engine, plugin, fm } = buildEngine();
+    plugin.app.vault.addFile("Knowledge/doc.md", "Local content");
     fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge" });
     plugin.syncState.docMap["doc1"] = {
       sysId: "doc1", path: "Knowledge/doc.md",
       lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "oldhash",
     };
+    // No base cache, no localContentHash
 
     const doc = makeDoc({ content: "Remote content" });
     const result = freshResult();
     await callHandlePulledDoc(engine, doc, result);
 
-    // With snow_ prefix, it should still detect dirty
-    const modifyCalled = plugin.app.vault.modify.mock.calls.length > 0;
-    const conflictCalled = ctx.cr.applyConflict.mock.calls.length > 0;
-    expect(modifyCalled || conflictCalled).toBe(true);
+    // No way to detect changes → treat as clean → overwrite
+    expect(plugin.app.vault.modify).toHaveBeenCalled();
+    expect(result.pulled).toBe(1);
   });
 });
 
@@ -1013,25 +981,33 @@ describe("sync — orchestration", () => {
   });
 
   it("pull runs before push (verify call order)", async () => {
-    const dirtyFile = makeTFile("Knowledge/dirty.md", "dirty");
-    const { engine, fw, apiClient, fm } = buildEngine({ dirtyFiles: [dirtyFile] });
-
-    fm._state.set("Knowledge/dirty.md", { sys_id: "d1", synced: false });
+    const { engine, plugin, apiClient, fm } = buildEngine();
+    // Set up a file that would be pushed (dirty hash)
+    const file = plugin.app.vault.addFile("Knowledge/dirty.md", "Changed content");
+    fm._state.set("Knowledge/dirty.md", { sys_id: "d1", category: "kb_knowledge" });
+    plugin.syncState.docMap["d1"] = {
+      sysId: "d1", path: "Knowledge/dirty.md",
+      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "oldhash",
+      localContentHash: md5Hash("Original content"), // differs from current file
+      lastSyncMtime: 0,
+    };
 
     const callOrder: string[] = [];
     apiClient.getChanges.mockImplementation(async () => {
-      callOrder.push("getChanges");
+      callOrder.push("pull");
       return { ok: true, data: [], status: 200 };
     });
-    fw.getDirtyFiles.mockImplementation(() => {
-      callOrder.push("getDirtyFiles");
-      return [];
+    apiClient.updateDocument.mockImplementation(async () => {
+      callOrder.push("push");
+      return { ok: true, data: { sys_updated_on: "2026-01-03 00:00:00", content_hash: "newhash" }, status: 200 };
     });
 
     await engine.sync();
 
-    const pullIdx = callOrder.indexOf("getChanges");
-    const pushIdx = callOrder.indexOf("getDirtyFiles");
+    const pullIdx = callOrder.indexOf("pull");
+    const pushIdx = callOrder.indexOf("push");
+    expect(pullIdx).toBeGreaterThanOrEqual(0);
+    expect(pushIdx).toBeGreaterThanOrEqual(0);
     expect(pullIdx).toBeLessThan(pushIdx);
   });
 
@@ -1105,6 +1081,7 @@ describe("exception safety", () => {
     plugin.syncState.docMap["doc1"] = {
       sysId: "doc1", path: "Knowledge/doc.md",
       lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "oldhash",
+      localContentHash: md5Hash("Old content"),
     };
 
     const doc = makeDoc({ content: "New remote content" });
@@ -1171,5 +1148,147 @@ describe("discoverNewDocs", () => {
 
     expect(result.pulled).toBe(0);
     expect(result.errors).toHaveLength(0);
+  });
+});
+
+// ==========================================================================
+// HASH-BASED SYNC — new tests
+// ==========================================================================
+
+describe("hash-based push discovery", () => {
+  it("skips file when mtime has not changed", async () => {
+    const { engine, plugin, apiClient, fm } = buildEngine();
+    const mtime = Date.now() - 10000;
+    const file = plugin.app.vault.addFile("Knowledge/doc.md", "Content", makeTFile("Knowledge/doc.md", undefined, mtime));
+    fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge" });
+    plugin.syncState.docMap["doc1"] = {
+      sysId: "doc1", path: "Knowledge/doc.md",
+      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "hash1",
+      localContentHash: md5Hash("Content"),
+      lastSyncMtime: mtime, // same as file mtime
+    };
+
+    apiClient.getChanges.mockResolvedValue({ ok: true, data: [], status: 200 });
+    const result = await engine.sync();
+
+    expect(apiClient.updateDocument).not.toHaveBeenCalled();
+    expect(result.pushed).toBe(0);
+  });
+
+  it("skips file when mtime bumped but hash unchanged (cosmetic sn_synced write)", async () => {
+    const { engine, plugin, apiClient, fm } = buildEngine();
+    const file = plugin.app.vault.addFile("Knowledge/doc.md", "Content");
+    fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge" });
+    plugin.syncState.docMap["doc1"] = {
+      sysId: "doc1", path: "Knowledge/doc.md",
+      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "hash1",
+      localContentHash: md5Hash("Content"),
+      lastSyncMtime: 0, // old mtime — will trigger hash check
+    };
+
+    apiClient.getChanges.mockResolvedValue({ ok: true, data: [], status: 200 });
+    const result = await engine.sync();
+
+    // Hash matches → skip even though mtime bumped
+    expect(apiClient.updateDocument).not.toHaveBeenCalled();
+    expect(result.pushed).toBe(0);
+  });
+
+  it("pushes file when hash changed", async () => {
+    const { engine, plugin, apiClient, fm } = buildEngine();
+    const file = plugin.app.vault.addFile("Knowledge/doc.md", "New content");
+    fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge" });
+    plugin.syncState.docMap["doc1"] = {
+      sysId: "doc1", path: "Knowledge/doc.md",
+      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "oldhash",
+      localContentHash: md5Hash("Old content"), // differs from current file
+      lastSyncMtime: 0,
+    };
+
+    apiClient.getChanges.mockResolvedValue({ ok: true, data: [], status: 200 });
+    const result = await engine.sync();
+
+    expect(apiClient.updateDocument).toHaveBeenCalled();
+    expect(result.pushed).toBe(1);
+  });
+
+  it("discovers new files by category without sys_id", async () => {
+    const { engine, plugin, apiClient, fm } = buildEngine();
+    const file = plugin.app.vault.addFile("Knowledge/new-doc.md", "New doc content");
+    fm._state.set("Knowledge/new-doc.md", { category: "kb_knowledge" }); // no sys_id
+
+    apiClient.getChanges.mockResolvedValue({ ok: true, data: [], status: 200 });
+    const result = await engine.sync();
+
+    expect(apiClient.createDocument).toHaveBeenCalled();
+    expect(result.pushed).toBe(1);
+  });
+
+  it("backfills legacy entry when hash matches server hash", async () => {
+    const { engine, plugin, apiClient, fm } = buildEngine();
+    const content = "Unchanged content";
+    const file = plugin.app.vault.addFile("Knowledge/doc.md", content);
+    fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge" });
+    plugin.syncState.docMap["doc1"] = {
+      sysId: "doc1", path: "Knowledge/doc.md",
+      lastServerTimestamp: "2026-01-01 00:00:00",
+      contentHash: md5Hash(content), // server hash matches local hash
+      // No localContentHash — legacy entry
+    };
+
+    apiClient.getChanges.mockResolvedValue({ ok: true, data: [], status: 200 });
+    await engine.sync();
+
+    // Should backfill without pushing
+    expect(apiClient.updateDocument).not.toHaveBeenCalled();
+    expect(plugin.syncState.docMap["doc1"]!.localContentHash).toBe(md5Hash(content));
+    expect(plugin.syncState.docMap["doc1"]!.lastSyncMtime).toBeDefined();
+  });
+});
+
+describe("pull updates localContentHash and lastSyncMtime", () => {
+  it("sets hash fields after overwrite (local clean)", async () => {
+    const { engine, plugin, fm } = buildEngine();
+    plugin.app.vault.addFile("Knowledge/doc.md", "Old content");
+    fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge" });
+    plugin.syncState.docMap["doc1"] = {
+      sysId: "doc1", path: "Knowledge/doc.md",
+      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "oldhash",
+      localContentHash: md5Hash("Old content"),
+    };
+
+    const doc = makeDoc({ content: "New server content", content_hash: "newhash" });
+    const result = freshResult();
+    await callHandlePulledDoc(engine, doc, result);
+
+    const entry = plugin.syncState.docMap["doc1"]!;
+    expect(entry.localContentHash).toBeDefined();
+    expect(entry.lastSyncMtime).toBeDefined();
+    expect(entry.contentHash).toBe("newhash");
+  });
+
+  it("does NOT update hash fields after merge (needs re-push)", async () => {
+    const baseContent = "### Section A\n\nOriginal A\n\n### Section B\n\nOriginal B\n";
+    const localContent = "### Section A\n\nLocal changed A\n\n### Section B\n\nOriginal B\n";
+    const remoteContent = "### Section A\n\nOriginal A\n\n### Section B\n\nRemote changed B\n";
+
+    const { engine, plugin, fm, bc } = buildEngine();
+    plugin.app.vault.addFile("Knowledge/doc.md", localContent);
+    fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge" });
+    const origHash = md5Hash(baseContent);
+    plugin.syncState.docMap["doc1"] = {
+      sysId: "doc1", path: "Knowledge/doc.md",
+      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "oldhash",
+      localContentHash: origHash,
+    };
+    bc._store.set("doc1", baseContent);
+
+    const doc = makeDoc({ content: remoteContent });
+    const result = freshResult();
+    await callHandlePulledDoc(engine, doc, result);
+
+    const entry = plugin.syncState.docMap["doc1"]!;
+    // localContentHash should NOT have been updated — still the old value
+    expect(entry.localContentHash).toBe(origHash);
   });
 });

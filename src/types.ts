@@ -26,6 +26,8 @@ export interface DocMapEntry {
   path: string;
   lastServerTimestamp: string;
   contentHash: string;
+  localContentHash?: string;
+  lastSyncMtime?: number;
 }
 
 export interface ConflictEntry {
