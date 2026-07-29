@@ -1,8 +1,9 @@
 import { ItemView, WorkspaceLeaf, Notice, Menu, TFile, Modal, Setting } from "obsidian";
 import type SNSyncPlugin from "./main";
 import type { SNDocument, SNMetadata, ConflictEntry } from "./types";
-import { computeSideBySide, computeDiff, extractSideBySideHunks, extractChangeGroups, type DiffLine } from "./diff";
+import { computeSideBySide, computeDiff, extractSideBySideHunks, type DiffLine } from "./diff";
 import { stripFrontmatter } from "./frontmatter-manager";
+import { seedLineChoices, buttonState, filterDocs, docStatus } from "./conflict-view-logic";
 
 export const VIEW_TYPE_SN_BROWSER = "sn-document-browser";
 
@@ -153,26 +154,21 @@ export class SNBrowserView extends ItemView {
 
   private getDocStatus(doc: SNDocument): string {
     const entry = this.plugin.syncState.docMap[doc.sys_id];
-    if (!entry) return "not-downloaded";
-    const file = this.plugin.app.vault.getAbstractFileByPath(entry.path);
-    if (!file) return "not-downloaded";
-    return "synced";
+    const fileExists = entry != null && this.plugin.app.vault.getAbstractFileByPath(entry.path) != null;
+    return docStatus(entry != null, fileExists);
   }
 
   private getFilteredDocs(): SNDocument[] {
-    return this.serverDocs.filter((doc) => {
-      if (this.selectedProject && doc.project !== this.selectedProject) return false;
-      if (this.selectedCategory && doc.category !== this.selectedCategory) return false;
-      if (this.selectedStatus) {
-        const status = this.getDocStatus(doc);
-        if (this.selectedStatus !== status) return false;
-      }
-      if (this.searchQuery) {
-        const q = this.searchQuery.toLowerCase();
-        if (!doc.title.toLowerCase().includes(q)) return false;
-      }
-      return true;
-    });
+    return filterDocs(
+      this.serverDocs,
+      {
+        project: this.selectedProject,
+        category: this.selectedCategory,
+        status: this.selectedStatus,
+        search: this.searchQuery,
+      },
+      (doc) => this.getDocStatus(doc),
+    );
   }
 
   private async renderBrowseTab(container: HTMLElement) {
@@ -405,14 +401,7 @@ export class SNBrowserView extends ItemView {
         // Section-level shortcut buttons
         const sectionBtns = sectionHeader.createDiv({ cls: "sn-drill-in-section-btns" });
 
-        const allRemovedTrue = diffLines.every((l, i) => l.type !== "removed" || sectionLineChoices.get(i) === true);
-        const allAddedFalse = diffLines.every((l, i) => l.type !== "added" || sectionLineChoices.get(i) === false);
-        const allRemovedFalse = diffLines.every((l, i) => l.type !== "removed" || sectionLineChoices.get(i) === false);
-        const allAddedTrue = diffLines.every((l, i) => l.type !== "added" || sectionLineChoices.get(i) === true);
-        const allNonCtxTrue = diffLines.every((l, i) => l.type === "context" || sectionLineChoices.get(i) === true);
-        const isAllLocal = allRemovedTrue && allAddedFalse;
-        const isAllRemote = allRemovedFalse && allAddedTrue;
-        const isAllBoth = allNonCtxTrue;
+        const { isAllLocal, isAllRemote, isAllBoth } = buttonState(diffLines, sectionLineChoices);
 
         const remoteBtn = sectionBtns.createEl("button", {
           text: "All remote",
@@ -559,20 +548,7 @@ export class SNBrowserView extends ItemView {
 
     // Initialize per-line defaults using change group analysis
     const choices = this.getOrCreateLineChoices(sysId, sectionKey);
-    const changeGroups = extractChangeGroups(diffLines);
-    for (const cg of changeGroups) {
-      for (let idx = cg.startLine; idx <= cg.endLine; idx++) {
-        if (choices.has(idx)) continue;
-        const line = diffLines[idx]!;
-        if (cg.hasLocal && cg.hasRemote) {
-          // Overlapping: removed → true, added → false
-          choices.set(idx, line.type === "removed");
-        } else {
-          // Non-overlapping: include all
-          choices.set(idx, true);
-        }
-      }
-    }
+    seedLineChoices(diffLines, choices);
 
     // Identify non-context rows for rendering
     const nonContextRows = new Set<number>();
@@ -772,9 +748,8 @@ export class SNBrowserView extends ItemView {
     dismissBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       void (async () => {
-        delete this.plugin.syncState.conflicts[conflict.sysId];
+        await this.plugin.conflictResolver.dismissConflict(conflict.sysId);
         this.perSectionChoices.delete(conflict.sysId);
-        await this.plugin.saveSettings();
         await this.render();
       })();
     });

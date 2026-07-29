@@ -304,6 +304,13 @@ export class ConflictResolver {
     return cleared;
   }
 
+  /** Drop a single conflict without resolving it (the view's per-row "Dismiss"). */
+  async dismissConflict(sysId: string): Promise<void> {
+    if (!this.plugin.syncState.conflicts[sysId]) return;
+    delete this.plugin.syncState.conflicts[sysId];
+    await this.plugin.saveSettings();
+  }
+
   async clearAllConflicts(): Promise<number> {
     const count = Object.keys(this.plugin.syncState.conflicts).length;
     if (count === 0) return 0;
