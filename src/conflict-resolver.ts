@@ -1,11 +1,24 @@
 import { Notice, TFile } from "obsidian";
 import type SNSyncPlugin from "./main";
-import type { ConflictEntry } from "./types";
+import type { ConflictEntry, SectionConflict } from "./types";
 import type { BaseCache } from "./base-cache";
 import { stripFrontmatter, replaceBody } from "./frontmatter-format";
 import { parseSections, serializeSections } from "./section-parser";
 import { mergeSections } from "./section-merger";
-import { computeDiff, assembleDiffWithLineChoices } from "./diff";
+import { computeDiff, computeSideBySide, assembleDiffWithLineChoices, type DiffLine, type SideBySideLine } from "./diff";
+
+/** One conflicting section prepared for interactive rendering — the diff the view renders is the diff apply will interpret. */
+export interface PreparedSection {
+  key: string;
+  heading: string;
+  diffLines: DiffLine[];
+  sideBySide: SideBySideLine[];
+}
+
+export interface PreparedLineDiff {
+  path: string;
+  sections: PreparedSection[];
+}
 import { contentHash } from "./content-hash";
 import { computeLocalHash } from "./sync-engine";
 
@@ -73,43 +86,30 @@ export function assemblePerSectionMerge(
 }
 
 /**
- * Assemble a merged document body using per-line boolean choices within sections.
- * Non-conflicting sections are auto-resolved; conflicting sections are assembled
- * from diff lines where each line is independently included or excluded.
+ * Assemble a merged body using per-line choices, diffing each conflicting
+ * section against the **stored** conflict bodies (what the user was shown),
+ * not a fresh re-diff of the current file. Non-conflicting sections still
+ * auto-merge from the current file/remote. This keeps the applied index space
+ * identical to the one the drill-in rendered (see prepareLineDiff).
  */
-export function assembleWithLineChoices(
+export function assembleWithStoredLineChoices(
   localBody: string,
   remoteBody: string,
   baseBody: string | null,
+  storedConflicts: SectionConflict[],
   lineChoices: Map<string, Map<number, boolean>>,
 ): string {
   const baseSections = baseBody ? parseSections(baseBody) : null;
-  const localSections = parseSections(localBody);
-  const remoteSections = parseSections(remoteBody);
-  const mergeResult = mergeSections(baseSections, localSections, remoteSections);
+  const mergeResult = mergeSections(baseSections, parseSections(localBody), parseSections(remoteBody));
+  const final = new Map(parseSections(mergeResult.mergedBody));
 
-  const mergedSections = parseSections(mergeResult.mergedBody);
-  const final = new Map(mergedSections);
-
-  for (const conflict of mergeResult.conflicts) {
-    const choices = lineChoices.get(conflict.key);
-    if (!choices || choices.size === 0) {
-      const section = localSections.get(conflict.key);
-      if (section) final.set(conflict.key, section);
-      continue;
-    }
-
-    const diffLines = computeDiff(conflict.localBody, conflict.remoteBody);
-    const mergedBody = assembleDiffWithLineChoices(diffLines, choices);
-
-    const localSection = localSections.get(conflict.key);
-    const remoteSection = remoteSections.get(conflict.key);
-    final.set(conflict.key, {
-      heading: localSection?.heading ?? remoteSection?.heading ?? "",
-      key: conflict.key,
-      body: mergedBody,
-      hash: contentHash(mergedBody),
-    });
+  for (const sc of storedConflicts) {
+    const choices = lineChoices.get(sc.key);
+    const body =
+      choices && choices.size > 0
+        ? assembleDiffWithLineChoices(computeDiff(sc.localBody, sc.remoteBody), choices)
+        : sc.localBody;
+    final.set(sc.key, { heading: sc.heading, key: sc.key, body, hash: contentHash(body) });
   }
 
   return serializeSections(final);
@@ -245,7 +245,9 @@ export class ConflictResolver {
       ? stripFrontmatter(conflict.ancestorContent)
       : await this.baseCache.loadBase(sysId);
 
-    const mergedBody = assembleWithLineChoices(localBody, remoteBody, baseBody, lineChoices);
+    const mergedBody = assembleWithStoredLineChoices(
+      localBody, remoteBody, baseBody, conflict.sectionConflicts ?? [], lineChoices,
+    );
 
     const newContent = replaceBody(raw, mergedBody);
 
@@ -262,6 +264,23 @@ export class ConflictResolver {
 
     const fileName = conflict.path.split("/").pop() ?? conflict.path;
     new Notice(`"${fileName}" merged with per-line choices.`);
+  }
+
+  /**
+   * The per-section diffs for a conflict's drill-in view, computed once from the
+   * stored conflict bodies. The view renders exactly these; resolveWithLineChoices
+   * interprets choices against the same (stored) diff, so their indices can't drift.
+   */
+  prepareLineDiff(sysId: string): PreparedLineDiff | null {
+    const conflict = this.plugin.syncState.conflicts[sysId];
+    if (!conflict) return null;
+    const sections: PreparedSection[] = (conflict.sectionConflicts ?? []).map((s) => ({
+      key: s.key,
+      heading: s.heading,
+      diffLines: computeDiff(s.localBody, s.remoteBody),
+      sideBySide: computeSideBySide(s.localBody, s.remoteBody),
+    }));
+    return { path: conflict.path, sections };
   }
 
   getConflictForPath(path: string): ConflictEntry | null {

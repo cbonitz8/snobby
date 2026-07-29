@@ -1,9 +1,10 @@
 import { ItemView, WorkspaceLeaf, Notice, Menu, TFile, Modal, Setting } from "obsidian";
 import type SNSyncPlugin from "./main";
 import type { SNDocument, SNMetadata, ConflictEntry } from "./types";
-import { computeSideBySide, computeDiff, extractSideBySideHunks, type DiffLine } from "./diff";
+import { computeSideBySide, extractSideBySideHunks, type DiffLine } from "./diff";
 import { stripFrontmatter } from "./frontmatter-manager";
 import { seedLineChoices, buttonState, filterDocs, docStatus } from "./conflict-view-logic";
+import type { PreparedSection } from "./conflict-resolver";
 
 export const VIEW_TYPE_SN_BROWSER = "sn-document-browser";
 
@@ -381,12 +382,12 @@ export class SNBrowserView extends ItemView {
       meta.createEl("span", { text: `Remote modified: ${remoteTimeStr}` });
     }
 
-    const sc = conflict.sectionConflicts;
-    const hasSections = sc && sc.length > 0;
+    const prepared = this.plugin.conflictResolver.prepareLineDiff(conflict.sysId);
+    const hasSections = prepared != null && prepared.sections.length > 0;
 
     if (hasSections) {
       // Render each conflicting section with per-line interactive diff
-      for (const s of sc) {
+      for (const s of prepared.sections) {
         const sectionBlock = drillIn.createDiv({ cls: "sn-drill-in-section" });
 
         const sectionHeader = sectionBlock.createDiv({ cls: "sn-drill-in-section-header" });
@@ -395,7 +396,7 @@ export class SNBrowserView extends ItemView {
         sectionHeader.createEl("span", { text: name });
 
         // Render interactive diff (returns flat diff lines for button handlers)
-        const diffLines = this.renderInteractiveDiff(sectionBlock, conflict.sysId, s.key, s.localBody, s.remoteBody);
+        const diffLines = this.renderInteractiveDiff(sectionBlock, conflict.sysId, s);
         const sectionLineChoices = this.getOrCreateLineChoices(conflict.sysId, s.key);
 
         // Section-level shortcut buttons
@@ -534,12 +535,12 @@ export class SNBrowserView extends ItemView {
   private renderInteractiveDiff(
     container: HTMLElement,
     sysId: string,
-    sectionKey: string,
-    localBody: string,
-    remoteBody: string,
+    section: PreparedSection,
   ): DiffLine[] {
-    const allLines = computeSideBySide(localBody, remoteBody);
-    const diffLines = computeDiff(localBody, remoteBody);
+    // The resolver already computed these from the stored conflict bodies, so
+    // the diff we render is the exact diff resolveWithLineChoices will apply.
+    const allLines = section.sideBySide;
+    const diffLines = section.diffLines;
 
     if (allLines.length === 0) {
       container.createEl("p", { text: "Contents are identical.", cls: "sn-conflict-empty" });
@@ -547,7 +548,7 @@ export class SNBrowserView extends ItemView {
     }
 
     // Initialize per-line defaults using change group analysis
-    const choices = this.getOrCreateLineChoices(sysId, sectionKey);
+    const choices = this.getOrCreateLineChoices(sysId, section.key);
     seedLineChoices(diffLines, choices);
 
     // Identify non-context rows for rendering

@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { hasConflictMarkers, stripConflictMarkers, assemblePerSectionMerge } from "./conflict-resolver";
+import {
+  hasConflictMarkers,
+  stripConflictMarkers,
+  assemblePerSectionMerge,
+  assembleWithStoredLineChoices,
+} from "./conflict-resolver";
+import { computeDiff } from "./diff";
+import type { SectionConflict } from "./types";
 
 describe("hasConflictMarkers", () => {
   it("detects conflict markers", () => {
@@ -77,5 +84,40 @@ describe("assemblePerSectionMerge", () => {
 
     const result = assemblePerSectionMerge(localBody, remoteBody, null, choices);
     expect(result).toContain("remote");
+  });
+});
+
+describe("assembleWithStoredLineChoices", () => {
+  // Current file's conflicting section differs from what was shown at detection.
+  const localBody = "### a\ncurrent-a\n### b\nB1";
+  const remoteBody = "### a\nremote-a\n### b\nB1";
+  const stored: SectionConflict[] = [
+    { key: "a", heading: "### a", localBody: "alpha", remoteBody: "beta", baseBody: null },
+  ];
+
+  it("applies line choices against the STORED bodies, not the current file", () => {
+    // choose the local ("alpha") side of the stored diff, drop the added ("beta") side
+    const diff = computeDiff("alpha", "beta");
+    const choices = new Map<number, boolean>();
+    diff.forEach((l, i) => {
+      if (l.type === "removed") choices.set(i, true);
+      else if (l.type === "added") choices.set(i, false);
+    });
+    const lineChoices = new Map([["a", choices]]);
+
+    const out = assembleWithStoredLineChoices(localBody, remoteBody, null, stored, lineChoices);
+    expect(out).toContain("alpha"); // from the stored diff
+    expect(out).not.toContain("beta"); // excluded
+    expect(out).not.toContain("current-a"); // current-file body was overridden
+  });
+
+  it("keeps the non-conflicting section merged from the current file/remote", () => {
+    const out = assembleWithStoredLineChoices(localBody, remoteBody, null, stored, new Map());
+    expect(out).toContain("### b\nB1");
+  });
+
+  it("falls back to the stored local body when a section has no line choices", () => {
+    const out = assembleWithStoredLineChoices(localBody, remoteBody, null, stored, new Map());
+    expect(out).toContain("alpha");
   });
 });
