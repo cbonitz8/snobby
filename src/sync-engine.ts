@@ -10,8 +10,8 @@ import { resolveFilePath, sanitizePathSegment, isTopLevelCategory } from "./fold
 import { promptNewDocMetadata } from "./new-doc-modal";
 import { stripFrontmatter, contentForPush, replaceBody } from "./frontmatter-format";
 import { parseSections, serializeSections } from "./section-parser";
-import { mergeSections } from "./section-merger";
 import { md5Hash } from "./content-hash";
+import { reconcile } from "./reconciler";
 
 function sanitizeErrorMsg(msg: string): string {
   return msg.split("\n")[0]!.slice(0, 200);
@@ -479,69 +479,32 @@ export class SyncEngine {
         return;
       }
 
-      // Server content unchanged? Just update timestamp.
-      if (doc.content_hash && doc.content_hash === mapEntry.contentHash) {
+      const prefix = this.plugin.settings.frontmatterPrefix;
+      const vault = this.plugin.app.vault;
+      const localHash = await computeLocalHash(vault, prefix, file);
+      const localBody = await this.getBodyContent(file);
+      const remoteBody = stripFrontmatter(doc.content);
+      const cachedAncestor = await this.baseCache.loadBase(doc.sys_id);
+
+      const outcome = reconcile({
+        localBody,
+        remoteBody,
+        serverAncestor: null,
+        cachedAncestor,
+        remoteContentHash: doc.content_hash,
+        storedContentHash: mapEntry.contentHash,
+        storedLocalHash: mapEntry.localContentHash,
+        localHash,
+      });
+
+      if (outcome.kind === "no-change") {
+        // Server content unchanged — just advance the timestamp.
         mapEntry.lastServerTimestamp = doc.sys_updated_on;
         return;
       }
 
-      // Server content changed. Check if local has changed too.
-      const localHash = await computeLocalHash(
-        this.plugin.app.vault, this.plugin.settings.frontmatterPrefix, file
-      );
-
-      let localChanged: boolean;
-      if (mapEntry.localContentHash !== undefined) {
-        localChanged = localHash !== mapEntry.localContentHash;
-      } else {
-        // Legacy entry — fall back to base cache or direct body comparison
-        const baseBody = await this.baseCache.loadBase(doc.sys_id);
-        if (baseBody !== null) {
-          const localBody = await this.getBodyContent(file);
-          localChanged = localBody !== baseBody;
-        } else {
-          // No base and no localContentHash — compare local body against server body directly.
-          // If identical, local hasn't changed. If different, treat as local changed (merge).
-          const localBody = await this.getBodyContent(file);
-          const remoteBody = stripFrontmatter(doc.content);
-          localChanged = localBody !== remoteBody;
-        }
-      }
-
-      if (localChanged) {
-        // Both sides changed — attempt section-level merge
-        const localBody = await this.getBodyContent(file);
-        const remoteBody = stripFrontmatter(doc.content);
-        const baseBody = await this.baseCache.loadBase(doc.sys_id);
-        const baseSections = baseBody ? parseSections(baseBody) : null;
-        const localSections = parseSections(localBody);
-        const remoteSections = parseSections(remoteBody);
-        const mergeResult = mergeSections(baseSections, localSections, remoteSections);
-
-        if (!mergeResult.hasConflicts) {
-          const fm = this.frontmatterManager.read(file);
-          await this.fileWatcher.duringSyncWrite(file.path, async () => {
-            const merged = await this.rebuildWithFrontmatter(file, mergeResult.mergedBody);
-            await this.plugin.app.vault.modify(file, merged);
-            await this.frontmatterManager.write(file, { ...fm, synced: false });
-          });
-          await this.baseCache.saveBase(doc.sys_id, mergeResult.mergedBody);
-          mapEntry.lastServerTimestamp = doc.sys_updated_on;
-          mapEntry.contentHash = doc.content_hash ?? "";
-          // Do NOT update localContentHash/lastSyncMtime — merged content needs re-push
-          result.pulled++;
-        } else {
-          this.conflictResolver.applyConflict({
-            sysId: doc.sys_id,
-            path: mapEntry.path,
-            remoteContent: doc.content,
-            remoteTimestamp: doc.sys_updated_on,
-            sectionConflicts: mergeResult.conflicts,
-          });
-          result.conflicts++;
-        }
-      } else {
-        // Local is clean — overwrite with remote
+      if (outcome.kind === "overwrite-local") {
+        // Local is clean — overwrite with remote.
         const fm = this.frontmatterManager.read(file);
         await this.fileWatcher.duringSyncWrite(file.path, async () => {
           await this.plugin.app.vault.modify(file, doc.content);
@@ -553,15 +516,39 @@ export class SyncEngine {
             synced: true,
           });
         });
-        await this.baseCache.saveBase(doc.sys_id, stripFrontmatter(doc.content));
+        await this.baseCache.saveBase(doc.sys_id, remoteBody);
         mapEntry.lastServerTimestamp = doc.sys_updated_on;
         mapEntry.contentHash = doc.content_hash ?? "";
-        mapEntry.localContentHash = await computeLocalHash(
-          this.plugin.app.vault, this.plugin.settings.frontmatterPrefix, file
-        );
+        mapEntry.localContentHash = await computeLocalHash(vault, prefix, file);
         mapEntry.lastSyncMtime = file.stat.mtime;
         result.pulled++;
+        return;
       }
+
+      if (outcome.kind === "auto-merged") {
+        const fm = this.frontmatterManager.read(file);
+        await this.fileWatcher.duringSyncWrite(file.path, async () => {
+          const merged = await this.rebuildWithFrontmatter(file, outcome.mergedBody);
+          await this.plugin.app.vault.modify(file, merged);
+          await this.frontmatterManager.write(file, { ...fm, synced: false });
+        });
+        await this.baseCache.saveBase(doc.sys_id, outcome.mergedBody);
+        mapEntry.lastServerTimestamp = doc.sys_updated_on;
+        mapEntry.contentHash = doc.content_hash ?? "";
+        // Do NOT update localContentHash/lastSyncMtime — merged content needs re-push
+        result.pulled++;
+        return;
+      }
+
+      // outcome.kind === "conflict"
+      this.conflictResolver.applyConflict({
+        sysId: doc.sys_id,
+        path: mapEntry.path,
+        remoteContent: doc.content,
+        remoteTimestamp: doc.sys_updated_on,
+        sectionConflicts: outcome.sectionConflicts,
+      });
+      result.conflicts++;
     } else {
       await this.createLocalFile(doc);
       result.pulled++;
@@ -693,34 +680,38 @@ export class SyncEngine {
               await this.baseCache.saveBase(fm.sys_id, localBody);
               result.pushed++;
             } else {
-              // Real conflict — attempt section merge with server ancestor
-              const ancestorBody = conflictData.ancestor_content
+              // Real conflict — reconcile against the server ancestor (else the cache).
+              const serverAncestor = conflictData.ancestor_content
                 ? stripFrontmatter(conflictData.ancestor_content)
-                : await this.baseCache.loadBase(fm.sys_id);
+                : null;
+              const cachedAncestor =
+                serverAncestor === null ? await this.baseCache.loadBase(fm.sys_id) : null;
+              const outcome = reconcile({
+                localBody,
+                remoteBody,
+                serverAncestor,
+                cachedAncestor,
+                localAlreadyDiverged: true,
+              });
 
-              const baseSections = ancestorBody ? parseSections(ancestorBody) : null;
-              const localSections = parseSections(localBody);
-              const remoteSections = parseSections(remoteBody);
-              const mergeResult = mergeSections(baseSections, localSections, remoteSections);
-
-              if (!mergeResult.hasConflicts) {
+              if (outcome.kind === "auto-merged") {
                 // Auto-merge succeeded — write merged, will re-push next cycle
                 await this.fileWatcher.duringSyncWrite(file.path, async () => {
-                  const merged = await this.rebuildWithFrontmatter(file, mergeResult.mergedBody);
+                  const merged = await this.rebuildWithFrontmatter(file, outcome.mergedBody);
                   await this.plugin.app.vault.modify(file, merged);
                   await this.frontmatterManager.markDirty(file);
                 });
-                await this.baseCache.saveBase(fm.sys_id, mergeResult.mergedBody);
+                await this.baseCache.saveBase(fm.sys_id, outcome.mergedBody);
                 if (conflictData.content_hash && mapEntry) {
                   mapEntry.contentHash = conflictData.content_hash;
                 }
-              } else {
+              } else if (outcome.kind === "conflict") {
                 this.conflictResolver.applyConflict({
                   sysId: fm.sys_id,
                   path: file.path,
                   remoteContent: conflictData.content,
                   remoteTimestamp: conflictData.sys_updated_on,
-                  sectionConflicts: mergeResult.conflicts,
+                  sectionConflicts: outcome.sectionConflicts,
                   ancestorContent: conflictData.ancestor_content ?? undefined,
                 });
                 result.conflicts++;
@@ -747,26 +738,29 @@ export class SyncEngine {
                 await this.baseCache.saveBase(fm.sys_id, localBody);
                 result.pushed++;
               } else {
-                const ancestorBody = await this.baseCache.loadBase(fm.sys_id);
-                const baseSections = ancestorBody ? parseSections(ancestorBody) : null;
-                const localSections = parseSections(localBody);
-                const remoteSections = parseSections(remoteBody);
-                const mergeResult = mergeSections(baseSections, localSections, remoteSections);
+                const cachedAncestor = await this.baseCache.loadBase(fm.sys_id);
+                const outcome = reconcile({
+                  localBody,
+                  remoteBody,
+                  serverAncestor: null,
+                  cachedAncestor,
+                  localAlreadyDiverged: true,
+                });
 
-                if (!mergeResult.hasConflicts) {
+                if (outcome.kind === "auto-merged") {
                   await this.fileWatcher.duringSyncWrite(file.path, async () => {
-                    const merged = await this.rebuildWithFrontmatter(file, mergeResult.mergedBody);
+                    const merged = await this.rebuildWithFrontmatter(file, outcome.mergedBody);
                     await this.plugin.app.vault.modify(file, merged);
                     await this.frontmatterManager.markDirty(file);
                   });
-                  await this.baseCache.saveBase(fm.sys_id, mergeResult.mergedBody);
-                } else {
+                  await this.baseCache.saveBase(fm.sys_id, outcome.mergedBody);
+                } else if (outcome.kind === "conflict") {
                   this.conflictResolver.applyConflict({
                     sysId: fm.sys_id,
                     path: file.path,
                     remoteContent: latest.data.content,
                     remoteTimestamp: latest.data.sys_updated_on,
-                    sectionConflicts: mergeResult.conflicts,
+                    sectionConflicts: outcome.sectionConflicts,
                   });
                   result.conflicts++;
                 }
