@@ -2,7 +2,7 @@ import { Notice, TFile } from "obsidian";
 import type SNSyncPlugin from "./main";
 import type { ConflictEntry } from "./types";
 import type { BaseCache } from "./base-cache";
-import { stripFrontmatter } from "./frontmatter-manager";
+import { stripFrontmatter, replaceBody } from "./frontmatter-format";
 import { parseSections, serializeSections } from "./section-parser";
 import { mergeSections } from "./section-merger";
 import { computeDiff, assembleDiffWithLineChoices } from "./diff";
@@ -210,17 +210,7 @@ export class ConflictResolver {
     const mergedBody = assemblePerSectionMerge(localBody, remoteBody, baseBody, choices);
 
     // Rebuild file with existing frontmatter + merged body
-    let newContent: string;
-    if (raw.startsWith("---")) {
-      const endIdx = raw.indexOf("\n---", 3);
-      if (endIdx !== -1) {
-        newContent = raw.substring(0, endIdx + 4) + "\n" + mergedBody;
-      } else {
-        newContent = mergedBody;
-      }
-    } else {
-      newContent = mergedBody;
-    }
+    const newContent = replaceBody(raw, mergedBody);
 
     this.plugin.fileWatcher.addSyncWritePath(conflict.path);
     try {
@@ -263,17 +253,7 @@ export class ConflictResolver {
 
     const mergedBody = assembleWithLineChoices(localBody, remoteBody, baseBody, lineChoices);
 
-    let newContent: string;
-    if (raw.startsWith("---")) {
-      const endIdx = raw.indexOf("\n---", 3);
-      if (endIdx !== -1) {
-        newContent = raw.substring(0, endIdx + 4) + "\n" + mergedBody;
-      } else {
-        newContent = mergedBody;
-      }
-    } else {
-      newContent = mergedBody;
-    }
+    const newContent = replaceBody(raw, mergedBody);
 
     this.plugin.fileWatcher.addSyncWritePath(conflict.path);
     try {

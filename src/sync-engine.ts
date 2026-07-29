@@ -8,7 +8,7 @@ import type { SNDocument, SNMetadata, SyncResult, ConflictResponseData } from ".
 import type { BaseCache } from "./base-cache";
 import { resolveFilePath, sanitizePathSegment, isTopLevelCategory } from "./folder-mapper";
 import { promptNewDocMetadata } from "./new-doc-modal";
-import { stripFrontmatter } from "./frontmatter-manager";
+import { stripFrontmatter, contentForPush, replaceBody } from "./frontmatter-format";
 import { parseSections, serializeSections } from "./section-parser";
 import { mergeSections } from "./section-merger";
 import { md5Hash } from "./content-hash";
@@ -32,25 +32,7 @@ export async function getContentForPush(
   file: TFile
 ): Promise<string> {
   const raw = await vault.read(file);
-  if (!raw.startsWith("---")) return raw;
-  const endIdx = raw.indexOf("\n---", 3);
-  if (endIdx === -1) return raw;
-
-  const fmBlock = raw.substring(4, endIdx);
-  const body = raw.slice(endIdx + 4);
-
-  const filteredLines = fmBlock.split("\n").filter((line) => {
-    const match = line.match(/^(\S+)\s*:/);
-    if (!match) return true;
-    return !match[1]!.startsWith(prefix);
-  });
-
-  const hasContent = filteredLines.some((line) => line.trim().length > 0);
-  if (!hasContent) {
-    return body.replace(/^\n+/, "");
-  }
-
-  return "---\n" + filteredLines.join("\n") + "\n---" + body;
+  return contentForPush(raw, prefix);
 }
 
 export class SyncEngine {
@@ -951,17 +933,7 @@ export class SyncEngine {
     const mergedBody = serializeSections(merged);
 
     // Rebuild pushable content with server's non-sn frontmatter + merged body
-    let pushContent: string;
-    if (serverDoc.content.startsWith("---")) {
-      const endIdx = serverDoc.content.indexOf("\n---", 3);
-      if (endIdx !== -1) {
-        pushContent = serverDoc.content.substring(0, endIdx + 4) + "\n" + mergedBody;
-      } else {
-        pushContent = mergedBody;
-      }
-    } else {
-      pushContent = mergedBody;
-    }
+    const pushContent = replaceBody(serverDoc.content, mergedBody);
 
     // Push as UPDATE to existing server doc
     const updateResult = await this.apiClient.updateDocument(serverDoc.sys_id, {
@@ -1134,10 +1106,7 @@ export class SyncEngine {
 
   private async rebuildWithFrontmatter(file: TFile, newBody: string): Promise<string> {
     const raw = await this.plugin.app.vault.read(file);
-    if (!raw.startsWith("---")) return newBody;
-    const endIdx = raw.indexOf("\n---", 3);
-    if (endIdx === -1) return newBody;
-    return raw.substring(0, endIdx + 4) + "\n" + newBody;
+    return replaceBody(raw, newBody);
   }
 
   private async getBodyContent(file: TFile): Promise<string> {

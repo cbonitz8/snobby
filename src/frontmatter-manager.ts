@@ -1,12 +1,9 @@
 import type { App, TFile } from "obsidian";
 import type { SNFrontmatter } from "./types";
 
-export function stripFrontmatter(content: string): string {
-  if (!content.startsWith("---")) return content;
-  const endIdx = content.indexOf("\n---", 3);
-  if (endIdx === -1) return content;
-  return content.slice(endIdx + 4).replace(/^\n+/, "");
-}
+// Re-exported from the pure block-format module so existing callers that
+// import it from here keep working.
+export { stripFrontmatter } from "./frontmatter-format";
 
 export class FrontmatterManager {
   private app: App;
