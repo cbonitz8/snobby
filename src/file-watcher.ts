@@ -46,6 +46,21 @@ export class FileWatcher {
     this.syncWritePaths.delete(path);
   }
 
+  /**
+   * Run a programmatic vault write to `path` with the file watcher suppressed,
+   * so the plugin's own write is never mistaken for a user edit (which would
+   * flip `sn_synced` to false and trigger a re-push loop). The path is
+   * suppressed before `fn` runs and released afterwards, even if `fn` throws.
+   */
+  async duringSyncWrite<T>(path: string, fn: () => Promise<T>): Promise<T> {
+    this.addSyncWritePath(path);
+    try {
+      return await fn();
+    } finally {
+      this.removeSyncWritePath(path);
+    }
+  }
+
   private isSyncedFile(path: string): boolean {
     if (!path.endsWith(".md")) return false;
     return !this.isExcluded(path);
@@ -79,12 +94,7 @@ export class FileWatcher {
     const fm = this.frontmatterManager.read(file);
     // Cosmetic: flip sn_synced to false so the user sees it's modified
     if (fm.sys_id && fm.synced !== false) {
-      this.syncWritePaths.add(file.path);
-      try {
-        await this.frontmatterManager.markDirty(file);
-      } finally {
-        this.syncWritePaths.delete(file.path);
-      }
+      await this.duringSyncWrite(file.path, () => this.frontmatterManager.markDirty(file));
     }
   }
 

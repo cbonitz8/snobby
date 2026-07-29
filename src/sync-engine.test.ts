@@ -241,13 +241,23 @@ function makeFrontmatterManager() {
 // ---------------------------------------------------------------------------
 
 function makeFileWatcher(dirtyFiles: TFile[] = []) {
-  return {
+  const fw = {
     addSyncWritePath: vi.fn(),
     removeSyncWritePath: vi.fn(),
     getDirtyFiles: vi.fn(() => dirtyFiles),
     isExcluded: vi.fn(() => false),
     flushPending: vi.fn().mockResolvedValue(undefined),
+    // Mirror the real duringSyncWrite so add/remove pairing assertions still hold.
+    duringSyncWrite: vi.fn(async (path: string, fn: () => Promise<unknown>) => {
+      fw.addSyncWritePath(path);
+      try {
+        return await fn();
+      } finally {
+        fw.removeSyncWritePath(path);
+      }
+    }),
   };
+  return fw;
 }
 
 // ---------------------------------------------------------------------------
