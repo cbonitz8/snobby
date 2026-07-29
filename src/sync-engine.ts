@@ -8,10 +8,10 @@ import type { SNDocument, SNMetadata, SyncResult, ConflictResponseData } from ".
 import type { BaseCache } from "./base-cache";
 import { resolveFilePath, sanitizePathSegment, isTopLevelCategory } from "./folder-mapper";
 import { promptNewDocMetadata } from "./new-doc-modal";
-import { stripFrontmatter } from "./frontmatter-manager";
+import { stripFrontmatter, contentForPush, replaceBody } from "./frontmatter-format";
 import { parseSections, serializeSections } from "./section-parser";
-import { mergeSections } from "./section-merger";
 import { md5Hash } from "./content-hash";
+import { reconcile } from "./reconciler";
 
 function sanitizeErrorMsg(msg: string): string {
   return msg.split("\n")[0]!.slice(0, 200);
@@ -32,25 +32,7 @@ export async function getContentForPush(
   file: TFile
 ): Promise<string> {
   const raw = await vault.read(file);
-  if (!raw.startsWith("---")) return raw;
-  const endIdx = raw.indexOf("\n---", 3);
-  if (endIdx === -1) return raw;
-
-  const fmBlock = raw.substring(4, endIdx);
-  const body = raw.slice(endIdx + 4);
-
-  const filteredLines = fmBlock.split("\n").filter((line) => {
-    const match = line.match(/^(\S+)\s*:/);
-    if (!match) return true;
-    return !match[1]!.startsWith(prefix);
-  });
-
-  const hasContent = filteredLines.some((line) => line.trim().length > 0);
-  if (!hasContent) {
-    return body.replace(/^\n+/, "");
-  }
-
-  return "---\n" + filteredLines.join("\n") + "\n---" + body;
+  return contentForPush(raw, prefix);
 }
 
 export class SyncEngine {
@@ -237,12 +219,9 @@ export class SyncEngine {
       for (const entry of entries) {
         const file = this.plugin.app.vault.getAbstractFileByPath(entry.path);
         if (file instanceof TFile) {
-          this.fileWatcher.addSyncWritePath(entry.path);
-          try {
-            await this.plugin.app.fileManager.trashFile(file);
-          } finally {
-            this.fileWatcher.removeSyncWritePath(entry.path);
-          }
+          await this.fileWatcher.duringSyncWrite(entry.path, () =>
+            this.plugin.app.fileManager.trashFile(file),
+          );
           deleted++;
         }
       }
@@ -316,15 +295,12 @@ export class SyncEngine {
             latestTs = newDoc.sys_updated_on;
           }
 
-          this.fileWatcher.addSyncWritePath(file.path);
-          try {
-            await this.frontmatterManager.write(file, {
+          await this.fileWatcher.duringSyncWrite(file.path, () =>
+            this.frontmatterManager.write(file, {
               sys_id: newDoc.sys_id,
               synced: true,
-            });
-          } finally {
-            this.fileWatcher.removeSyncWritePath(file.path);
-          }
+            }),
+          );
 
           this.plugin.syncState.docMap[newDoc.sys_id] = {
             sysId: newDoc.sys_id,
@@ -410,12 +386,9 @@ export class SyncEngine {
             if (!latestTs || ts > latestTs) latestTs = ts;
           }
 
-          this.fileWatcher.addSyncWritePath(file.path);
-          try {
-            await this.frontmatterManager.markSynced(file);
-          } finally {
-            this.fileWatcher.removeSyncWritePath(file.path);
-          }
+          await this.fileWatcher.duringSyncWrite(file.path, () =>
+            this.frontmatterManager.markSynced(file),
+          );
 
           const entry = this.plugin.syncState.docMap[fm.sys_id!];
           if (entry) {
@@ -506,75 +479,34 @@ export class SyncEngine {
         return;
       }
 
-      // Server content unchanged? Just update timestamp.
-      if (doc.content_hash && doc.content_hash === mapEntry.contentHash) {
+      const prefix = this.plugin.settings.frontmatterPrefix;
+      const vault = this.plugin.app.vault;
+      const localHash = await computeLocalHash(vault, prefix, file);
+      const localBody = await this.getBodyContent(file);
+      const remoteBody = stripFrontmatter(doc.content);
+      const cachedAncestor = await this.baseCache.loadBase(doc.sys_id);
+
+      const outcome = reconcile({
+        localBody,
+        remoteBody,
+        serverAncestor: null,
+        cachedAncestor,
+        remoteContentHash: doc.content_hash,
+        storedContentHash: mapEntry.contentHash,
+        storedLocalHash: mapEntry.localContentHash,
+        localHash,
+      });
+
+      if (outcome.kind === "no-change") {
+        // Server content unchanged — just advance the timestamp.
         mapEntry.lastServerTimestamp = doc.sys_updated_on;
         return;
       }
 
-      // Server content changed. Check if local has changed too.
-      const localHash = await computeLocalHash(
-        this.plugin.app.vault, this.plugin.settings.frontmatterPrefix, file
-      );
-
-      let localChanged: boolean;
-      if (mapEntry.localContentHash !== undefined) {
-        localChanged = localHash !== mapEntry.localContentHash;
-      } else {
-        // Legacy entry — fall back to base cache or direct body comparison
-        const baseBody = await this.baseCache.loadBase(doc.sys_id);
-        if (baseBody !== null) {
-          const localBody = await this.getBodyContent(file);
-          localChanged = localBody !== baseBody;
-        } else {
-          // No base and no localContentHash — compare local body against server body directly.
-          // If identical, local hasn't changed. If different, treat as local changed (merge).
-          const localBody = await this.getBodyContent(file);
-          const remoteBody = stripFrontmatter(doc.content);
-          localChanged = localBody !== remoteBody;
-        }
-      }
-
-      if (localChanged) {
-        // Both sides changed — attempt section-level merge
-        const localBody = await this.getBodyContent(file);
-        const remoteBody = stripFrontmatter(doc.content);
-        const baseBody = await this.baseCache.loadBase(doc.sys_id);
-        const baseSections = baseBody ? parseSections(baseBody) : null;
-        const localSections = parseSections(localBody);
-        const remoteSections = parseSections(remoteBody);
-        const mergeResult = mergeSections(baseSections, localSections, remoteSections);
-
-        if (!mergeResult.hasConflicts) {
-          const fm = this.frontmatterManager.read(file);
-          this.fileWatcher.addSyncWritePath(file.path);
-          try {
-            const merged = await this.rebuildWithFrontmatter(file, mergeResult.mergedBody);
-            await this.plugin.app.vault.modify(file, merged);
-            await this.frontmatterManager.write(file, { ...fm, synced: false });
-          } finally {
-            this.fileWatcher.removeSyncWritePath(file.path);
-          }
-          await this.baseCache.saveBase(doc.sys_id, mergeResult.mergedBody);
-          mapEntry.lastServerTimestamp = doc.sys_updated_on;
-          mapEntry.contentHash = doc.content_hash ?? "";
-          // Do NOT update localContentHash/lastSyncMtime — merged content needs re-push
-          result.pulled++;
-        } else {
-          this.conflictResolver.applyConflict({
-            sysId: doc.sys_id,
-            path: mapEntry.path,
-            remoteContent: doc.content,
-            remoteTimestamp: doc.sys_updated_on,
-            sectionConflicts: mergeResult.conflicts,
-          });
-          result.conflicts++;
-        }
-      } else {
-        // Local is clean — overwrite with remote
+      if (outcome.kind === "overwrite-local") {
+        // Local is clean — overwrite with remote.
         const fm = this.frontmatterManager.read(file);
-        this.fileWatcher.addSyncWritePath(file.path);
-        try {
+        await this.fileWatcher.duringSyncWrite(file.path, async () => {
           await this.plugin.app.vault.modify(file, doc.content);
           await this.frontmatterManager.write(file, {
             sys_id: fm.sys_id,
@@ -583,18 +515,40 @@ export class SyncEngine {
             tags: fm.tags,
             synced: true,
           });
-        } finally {
-          this.fileWatcher.removeSyncWritePath(file.path);
-        }
-        await this.baseCache.saveBase(doc.sys_id, stripFrontmatter(doc.content));
+        });
+        await this.baseCache.saveBase(doc.sys_id, remoteBody);
         mapEntry.lastServerTimestamp = doc.sys_updated_on;
         mapEntry.contentHash = doc.content_hash ?? "";
-        mapEntry.localContentHash = await computeLocalHash(
-          this.plugin.app.vault, this.plugin.settings.frontmatterPrefix, file
-        );
+        mapEntry.localContentHash = await computeLocalHash(vault, prefix, file);
         mapEntry.lastSyncMtime = file.stat.mtime;
         result.pulled++;
+        return;
       }
+
+      if (outcome.kind === "auto-merged") {
+        const fm = this.frontmatterManager.read(file);
+        await this.fileWatcher.duringSyncWrite(file.path, async () => {
+          const merged = await this.rebuildWithFrontmatter(file, outcome.mergedBody);
+          await this.plugin.app.vault.modify(file, merged);
+          await this.frontmatterManager.write(file, { ...fm, synced: false });
+        });
+        await this.baseCache.saveBase(doc.sys_id, outcome.mergedBody);
+        mapEntry.lastServerTimestamp = doc.sys_updated_on;
+        mapEntry.contentHash = doc.content_hash ?? "";
+        // Do NOT update localContentHash/lastSyncMtime — merged content needs re-push
+        result.pulled++;
+        return;
+      }
+
+      // outcome.kind === "conflict"
+      this.conflictResolver.applyConflict({
+        sysId: doc.sys_id,
+        path: mapEntry.path,
+        remoteContent: doc.content,
+        remoteTimestamp: doc.sys_updated_on,
+        sectionConflicts: outcome.sectionConflicts,
+      });
+      result.conflicts++;
     } else {
       await this.createLocalFile(doc);
       result.pulled++;
@@ -711,12 +665,9 @@ export class SyncEngine {
 
             if (remoteBody === localBody) {
               // Content converged — no real conflict
-              this.fileWatcher.addSyncWritePath(file.path);
-              try {
-                await this.frontmatterManager.markSynced(file);
-              } finally {
-                this.fileWatcher.removeSyncWritePath(file.path);
-              }
+              await this.fileWatcher.duringSyncWrite(file.path, () =>
+                this.frontmatterManager.markSynced(file),
+              );
               if (conflictData.content_hash && mapEntry) {
                 mapEntry.contentHash = conflictData.content_hash;
               }
@@ -729,37 +680,38 @@ export class SyncEngine {
               await this.baseCache.saveBase(fm.sys_id, localBody);
               result.pushed++;
             } else {
-              // Real conflict — attempt section merge with server ancestor
-              const ancestorBody = conflictData.ancestor_content
+              // Real conflict — reconcile against the server ancestor (else the cache).
+              const serverAncestor = conflictData.ancestor_content
                 ? stripFrontmatter(conflictData.ancestor_content)
-                : await this.baseCache.loadBase(fm.sys_id);
+                : null;
+              const cachedAncestor =
+                serverAncestor === null ? await this.baseCache.loadBase(fm.sys_id) : null;
+              const outcome = reconcile({
+                localBody,
+                remoteBody,
+                serverAncestor,
+                cachedAncestor,
+                localAlreadyDiverged: true,
+              });
 
-              const baseSections = ancestorBody ? parseSections(ancestorBody) : null;
-              const localSections = parseSections(localBody);
-              const remoteSections = parseSections(remoteBody);
-              const mergeResult = mergeSections(baseSections, localSections, remoteSections);
-
-              if (!mergeResult.hasConflicts) {
+              if (outcome.kind === "auto-merged") {
                 // Auto-merge succeeded — write merged, will re-push next cycle
-                this.fileWatcher.addSyncWritePath(file.path);
-                try {
-                  const merged = await this.rebuildWithFrontmatter(file, mergeResult.mergedBody);
+                await this.fileWatcher.duringSyncWrite(file.path, async () => {
+                  const merged = await this.rebuildWithFrontmatter(file, outcome.mergedBody);
                   await this.plugin.app.vault.modify(file, merged);
                   await this.frontmatterManager.markDirty(file);
-                } finally {
-                  this.fileWatcher.removeSyncWritePath(file.path);
-                }
-                await this.baseCache.saveBase(fm.sys_id, mergeResult.mergedBody);
+                });
+                await this.baseCache.saveBase(fm.sys_id, outcome.mergedBody);
                 if (conflictData.content_hash && mapEntry) {
                   mapEntry.contentHash = conflictData.content_hash;
                 }
-              } else {
+              } else if (outcome.kind === "conflict") {
                 this.conflictResolver.applyConflict({
                   sysId: fm.sys_id,
                   path: file.path,
                   remoteContent: conflictData.content,
                   remoteTimestamp: conflictData.sys_updated_on,
-                  sectionConflicts: mergeResult.conflicts,
+                  sectionConflicts: outcome.sectionConflicts,
                   ancestorContent: conflictData.ancestor_content ?? undefined,
                 });
                 result.conflicts++;
@@ -773,12 +725,9 @@ export class SyncEngine {
               const remoteBody = stripFrontmatter(latest.data.content);
 
               if (remoteBody === localBody) {
-                this.fileWatcher.addSyncWritePath(file.path);
-                try {
-                  await this.frontmatterManager.markSynced(file);
-                } finally {
-                  this.fileWatcher.removeSyncWritePath(file.path);
-                }
+                await this.fileWatcher.duringSyncWrite(file.path, () =>
+                  this.frontmatterManager.markSynced(file),
+                );
                 const fallbackEntry = this.plugin.syncState.docMap[fm.sys_id];
                 if (fallbackEntry) {
                   fallbackEntry.localContentHash = await computeLocalHash(
@@ -789,29 +738,29 @@ export class SyncEngine {
                 await this.baseCache.saveBase(fm.sys_id, localBody);
                 result.pushed++;
               } else {
-                const ancestorBody = await this.baseCache.loadBase(fm.sys_id);
-                const baseSections = ancestorBody ? parseSections(ancestorBody) : null;
-                const localSections = parseSections(localBody);
-                const remoteSections = parseSections(remoteBody);
-                const mergeResult = mergeSections(baseSections, localSections, remoteSections);
+                const cachedAncestor = await this.baseCache.loadBase(fm.sys_id);
+                const outcome = reconcile({
+                  localBody,
+                  remoteBody,
+                  serverAncestor: null,
+                  cachedAncestor,
+                  localAlreadyDiverged: true,
+                });
 
-                if (!mergeResult.hasConflicts) {
-                  this.fileWatcher.addSyncWritePath(file.path);
-                  try {
-                    const merged = await this.rebuildWithFrontmatter(file, mergeResult.mergedBody);
+                if (outcome.kind === "auto-merged") {
+                  await this.fileWatcher.duringSyncWrite(file.path, async () => {
+                    const merged = await this.rebuildWithFrontmatter(file, outcome.mergedBody);
                     await this.plugin.app.vault.modify(file, merged);
                     await this.frontmatterManager.markDirty(file);
-                  } finally {
-                    this.fileWatcher.removeSyncWritePath(file.path);
-                  }
-                  await this.baseCache.saveBase(fm.sys_id, mergeResult.mergedBody);
-                } else {
+                  });
+                  await this.baseCache.saveBase(fm.sys_id, outcome.mergedBody);
+                } else if (outcome.kind === "conflict") {
                   this.conflictResolver.applyConflict({
                     sysId: fm.sys_id,
                     path: file.path,
                     remoteContent: latest.data.content,
                     remoteTimestamp: latest.data.sys_updated_on,
-                    sectionConflicts: mergeResult.conflicts,
+                    sectionConflicts: outcome.sectionConflicts,
                   });
                   result.conflicts++;
                 }
@@ -824,12 +773,9 @@ export class SyncEngine {
         return null;
       }
 
-      this.fileWatcher.addSyncWritePath(file.path);
-      try {
-        await this.frontmatterManager.markSynced(file);
-      } finally {
-        this.fileWatcher.removeSyncWritePath(file.path);
-      }
+      await this.fileWatcher.duringSyncWrite(file.path, () =>
+        this.frontmatterManager.markSynced(file),
+      );
 
       const entry = this.plugin.syncState.docMap[fm.sys_id];
       if (entry && updateResult.data) {
@@ -895,18 +841,15 @@ export class SyncEngine {
 
       const newDoc = createResult.data;
 
-      this.fileWatcher.addSyncWritePath(file.path);
-      try {
-        await this.frontmatterManager.write(file, {
+      await this.fileWatcher.duringSyncWrite(file.path, () =>
+        this.frontmatterManager.write(file, {
           sys_id: newDoc.sys_id,
           category: newDoc.category,
           project: newDoc.project,
           tags: newDoc.tags,
           synced: true,
-        });
-      } finally {
-        this.fileWatcher.removeSyncWritePath(file.path);
-      }
+        }),
+      );
 
       this.plugin.syncState.docMap[newDoc.sys_id] = {
         sysId: newDoc.sys_id,
@@ -951,17 +894,7 @@ export class SyncEngine {
     const mergedBody = serializeSections(merged);
 
     // Rebuild pushable content with server's non-sn frontmatter + merged body
-    let pushContent: string;
-    if (serverDoc.content.startsWith("---")) {
-      const endIdx = serverDoc.content.indexOf("\n---", 3);
-      if (endIdx !== -1) {
-        pushContent = serverDoc.content.substring(0, endIdx + 4) + "\n" + mergedBody;
-      } else {
-        pushContent = mergedBody;
-      }
-    } else {
-      pushContent = mergedBody;
-    }
+    const pushContent = replaceBody(serverDoc.content, mergedBody);
 
     // Push as UPDATE to existing server doc
     const updateResult = await this.apiClient.updateDocument(serverDoc.sys_id, {
@@ -982,8 +915,7 @@ export class SyncEngine {
     }
 
     // Update local file with merged content + server's sys_id
-    this.fileWatcher.addSyncWritePath(file.path);
-    try {
+    await this.fileWatcher.duringSyncWrite(file.path, async () => {
       const merged = await this.rebuildWithFrontmatter(file, mergedBody);
       await this.plugin.app.vault.modify(file, merged);
       await this.frontmatterManager.write(file, {
@@ -993,9 +925,7 @@ export class SyncEngine {
         tags: serverDoc.tags,
         synced: true,
       });
-    } finally {
-      this.fileWatcher.removeSyncWritePath(file.path);
-    }
+    });
 
     this.plugin.syncState.docMap[serverDoc.sys_id] = {
       sysId: serverDoc.sys_id,
@@ -1073,8 +1003,7 @@ export class SyncEngine {
       await this.ensureFolderExists(parentDir);
     }
 
-    this.fileWatcher.addSyncWritePath(finalPath);
-    try {
+    await this.fileWatcher.duringSyncWrite(finalPath, async () => {
       await this.plugin.app.vault.create(finalPath, doc.content);
 
       const createdFile = this.plugin.app.vault.getAbstractFileByPath(finalPath);
@@ -1087,9 +1016,7 @@ export class SyncEngine {
           synced: true,
         });
       }
-    } finally {
-      this.fileWatcher.removeSyncWritePath(finalPath);
-    }
+    });
 
     const createdFileRef = this.plugin.app.vault.getAbstractFileByPath(finalPath);
     this.plugin.syncState.docMap[doc.sys_id] = {
@@ -1134,10 +1061,7 @@ export class SyncEngine {
 
   private async rebuildWithFrontmatter(file: TFile, newBody: string): Promise<string> {
     const raw = await this.plugin.app.vault.read(file);
-    if (!raw.startsWith("---")) return newBody;
-    const endIdx = raw.indexOf("\n---", 3);
-    if (endIdx === -1) return newBody;
-    return raw.substring(0, endIdx + 4) + "\n" + newBody;
+    return replaceBody(raw, newBody);
   }
 
   private async getBodyContent(file: TFile): Promise<string> {

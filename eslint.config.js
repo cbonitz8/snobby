@@ -153,8 +153,9 @@ export default defineConfig([
 					"^e\\.g\\. ",
 					// Tag placeholder example
 					"^tag\\d",
-					// Strings containing technical identifiers like sn_ prefix
+					// Strings containing technical identifiers like sn_ / sys_ prefixes
 					"sn_",
+					"sys_",
 				],
 			}],
 		},

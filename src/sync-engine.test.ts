@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi } from "vitest";
 import { TFile } from "obsidian";
-import { SyncEngine, computeLocalHash } from "./sync-engine";
+import { SyncEngine } from "./sync-engine";
 import { stripFrontmatter } from "./frontmatter-manager";
 import { md5Hash } from "./content-hash";
 import type {
@@ -10,8 +10,6 @@ import type {
   SyncResult,
   SyncState,
   SNSyncSettings,
-  DocMapEntry,
-  ConflictEntry,
   FolderMapping,
   SNMetadata,
 } from "./types";
@@ -92,7 +90,7 @@ function makeTFile(path: string, basename?: string, mtime?: number): TFile {
   const file = new TFile();
   (file as any).path = path;
   (file as any).name = path.split("/").pop() ?? path;
-  (file as any).basename = basename ?? (file as any).name.replace(/\.md$/, "");
+  (file as any).basename = basename ?? ((file as any).name as string).replace(/\.md$/, "");
   (file as any).extension = "md";
   file.stat.mtime = mtime ?? Date.now();
   return file;
@@ -241,13 +239,23 @@ function makeFrontmatterManager() {
 // ---------------------------------------------------------------------------
 
 function makeFileWatcher(dirtyFiles: TFile[] = []) {
-  return {
+  const fw = {
     addSyncWritePath: vi.fn(),
     removeSyncWritePath: vi.fn(),
     getDirtyFiles: vi.fn(() => dirtyFiles),
     isExcluded: vi.fn(() => false),
     flushPending: vi.fn().mockResolvedValue(undefined),
+    // Mirror the real duringSyncWrite so add/remove pairing assertions still hold.
+    duringSyncWrite: vi.fn(async (path: string, fn: () => Promise<unknown>) => {
+      fw.addSyncWritePath(path);
+      try {
+        return await fn();
+      } finally {
+        fw.removeSyncWritePath(path);
+      }
+    }),
   };
+  return fw;
 }
 
 // ---------------------------------------------------------------------------
@@ -307,25 +315,34 @@ function buildEngine(opts: {
   return { engine, plugin, apiClient, fm, fw, cr, bc };
 }
 
-// Convenience: invoke private methods
+// Convenience: invoke private methods through a typed view of the engine's internals.
+interface EngineInternals {
+  pull(result: SyncResult): Promise<string | null>;
+  push(result: SyncResult): Promise<string | null>;
+  handlePulledDoc(doc: SNDocument, result: SyncResult): Promise<void>;
+  handlePushFile(file: TFile, result: SyncResult): Promise<string | null>;
+  discoverNewDocs(result: SyncResult): Promise<void>;
+}
+const internals = (engine: SyncEngine): EngineInternals => engine as unknown as EngineInternals;
+
 function callPull(engine: SyncEngine, result: SyncResult): Promise<string | null> {
-  return (engine as any).pull(result);
+  return internals(engine).pull(result);
 }
 
 function callPush(engine: SyncEngine, result: SyncResult): Promise<string | null> {
-  return (engine as any).push(result);
+  return internals(engine).push(result);
 }
 
 function callHandlePulledDoc(engine: SyncEngine, doc: SNDocument, result: SyncResult): Promise<void> {
-  return (engine as any).handlePulledDoc(doc, result);
+  return internals(engine).handlePulledDoc(doc, result);
 }
 
 function callHandlePushFile(engine: SyncEngine, file: TFile, result: SyncResult): Promise<string | null> {
-  return (engine as any).handlePushFile(file, result);
+  return internals(engine).handlePushFile(file, result);
 }
 
 function callDiscoverNewDocs(engine: SyncEngine, result: SyncResult): Promise<void> {
-  return (engine as any).discoverNewDocs(result);
+  return internals(engine).discoverNewDocs(result);
 }
 
 function freshResult(): SyncResult {
@@ -351,7 +368,7 @@ describe("handlePulledDoc — server hash unchanged", () => {
     const result = freshResult();
     await callHandlePulledDoc(engine, doc, result);
 
-    expect(plugin.syncState.docMap["doc1"]!.lastServerTimestamp).toBe("2026-01-05 00:00:00");
+    expect(plugin.syncState.docMap["doc1"].lastServerTimestamp).toBe("2026-01-05 00:00:00");
   });
 
   it("does not increment result.pulled", async () => {
@@ -702,13 +719,7 @@ describe("handlePulledDoc — skipPullSysIds", () => {
     const result = freshResult();
     await callPush(engine, result);
 
-    // After push, skip set should be cleared — next pull should process
-    // Verify by calling handlePulledDoc and seeing it's not skipped
-    const { engine: engine2, plugin: plugin2 } = buildEngine();
-    // The original engine's skipPullSysIds should be cleared
-    const doc = makeDoc({ sys_id: "doc1", content: "test" });
-    const result2 = freshResult();
-    // Instead, just verify through the push path that it works
+    // After push, the skip set should be cleared.
     expect((engine as any).skipPullSysIds.size).toBe(0);
   });
 });
@@ -771,7 +782,7 @@ describe("handlePulledDoc — new document / missing file", () => {
 
 describe("pull — orchestration", () => {
   it("returns null when lastSyncTimestamp is empty", async () => {
-    const { engine, plugin } = buildEngine({ stateOverrides: { lastSyncTimestamp: "" } });
+    const { engine } = buildEngine({ stateOverrides: { lastSyncTimestamp: "" } });
     const result = freshResult();
     const ts = await callPull(engine, result);
 
@@ -790,7 +801,7 @@ describe("pull — orchestration", () => {
   });
 
   it("processes multiple docs and returns latest timestamp", async () => {
-    const { engine, plugin, apiClient } = buildEngine();
+    const { engine, apiClient } = buildEngine();
 
     const doc1 = makeDoc({ sys_id: "d1", content: "C1", sys_updated_on: "2026-01-02 00:00:00", category: "kb_knowledge", project: "proj1" });
     const doc2 = makeDoc({ sys_id: "d2", content: "C2", sys_updated_on: "2026-01-05 00:00:00", category: "kb_knowledge", project: "proj1" });
@@ -809,7 +820,7 @@ describe("pull — orchestration", () => {
   });
 
   it("skips docs in ignoredIds", async () => {
-    const { engine, plugin, apiClient } = buildEngine({
+    const { engine, apiClient } = buildEngine({
       stateOverrides: { ignoredIds: ["ignored1"] },
     });
 
@@ -833,7 +844,7 @@ describe("pull — orchestration", () => {
 
 describe("push — handlePushFile", () => {
   it("successful update: markSynced, base cache saved, mapEntry updated", async () => {
-    const { engine, plugin, apiClient, fm, bc, fw } = buildEngine();
+    const { engine, plugin, apiClient, fm, bc } = buildEngine();
     const file = plugin.app.vault.addFile("Knowledge/doc.md", "---\nsn_sys_id: doc1\nsn_synced: false\n---\nPush content");
     fm._state.set("Knowledge/doc.md", { sys_id: "doc1", synced: false });
     plugin.syncState.docMap["doc1"] = {
@@ -852,14 +863,14 @@ describe("push — handlePushFile", () => {
 
     expect(fm.markSynced).toHaveBeenCalled();
     expect(bc.saveBase).toHaveBeenCalled();
-    expect(plugin.syncState.docMap["doc1"]!.lastServerTimestamp).toBe("2026-01-10 00:00:00");
-    expect(plugin.syncState.docMap["doc1"]!.contentHash).toBe("pushedhash");
+    expect(plugin.syncState.docMap["doc1"].lastServerTimestamp).toBe("2026-01-10 00:00:00");
+    expect(plugin.syncState.docMap["doc1"].contentHash).toBe("pushedhash");
     expect(result.pushed).toBe(1);
     expect(ts).toBe("2026-01-10 00:00:00");
   });
 
   it("409 with matching content: converged, markSynced", async () => {
-    const { engine, plugin, apiClient, fm, bc } = buildEngine();
+    const { engine, plugin, apiClient, fm } = buildEngine();
     const pushBody = "Same content";
     const file = plugin.app.vault.addFile("Knowledge/doc.md", pushBody);
     fm._state.set("Knowledge/doc.md", { sys_id: "doc1", synced: false });
@@ -923,7 +934,7 @@ describe("push — handlePushFile", () => {
   });
 
   it("409 with differing content + merge conflicts: applyConflict called", async () => {
-    const { engine, plugin, apiClient, fm, cr, bc } = buildEngine();
+    const { engine, plugin, apiClient, fm, cr } = buildEngine();
     // Both sides changed the same section
     const base = "### Section A\n\nOriginal content\n";
     const localContent = "### Section A\n\nLocal changed content\n";
@@ -956,7 +967,7 @@ describe("push — handlePushFile", () => {
   });
 
   it("new file (no sys_id): createDocument called", async () => {
-    const { engine, plugin, apiClient, fm, bc } = buildEngine();
+    const { engine, plugin, apiClient, fm } = buildEngine();
     const file = plugin.app.vault.addFile("Knowledge/new-doc.md", "Brand new content");
     fm._state.set("Knowledge/new-doc.md", { category: "kb_knowledge", project: "proj1" });
 
@@ -1001,7 +1012,7 @@ describe("sync — orchestration", () => {
   it("pull runs before push (verify call order)", async () => {
     const { engine, plugin, apiClient, fm } = buildEngine();
     // Set up a file that would be pushed (dirty hash)
-    const file = plugin.app.vault.addFile("Knowledge/dirty.md", "Changed content");
+    plugin.app.vault.addFile("Knowledge/dirty.md", "Changed content");
     fm._state.set("Knowledge/dirty.md", { sys_id: "d1", category: "kb_knowledge" });
     plugin.syncState.docMap["d1"] = {
       sysId: "d1", path: "Knowledge/dirty.md",
@@ -1054,7 +1065,7 @@ describe("sync — orchestration", () => {
 describe("exception safety", () => {
   it("if vault.modify throws during pull, removeSyncWritePath still called", async () => {
     const { engine, plugin, fm, fw } = buildEngine();
-    const file = plugin.app.vault.addFile("Knowledge/doc.md", "Old content");
+    plugin.app.vault.addFile("Knowledge/doc.md", "Old content");
     fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge", synced: true });
     plugin.syncState.docMap["doc1"] = {
       sysId: "doc1", path: "Knowledge/doc.md",
@@ -1075,7 +1086,7 @@ describe("exception safety", () => {
 
   it("if frontmatterManager.write throws, removeSyncWritePath still called", async () => {
     const { engine, plugin, fm, fw } = buildEngine();
-    const file = plugin.app.vault.addFile("Knowledge/doc.md", "Old content");
+    plugin.app.vault.addFile("Knowledge/doc.md", "Old content");
     fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge", synced: true });
     plugin.syncState.docMap["doc1"] = {
       sysId: "doc1", path: "Knowledge/doc.md",
@@ -1095,8 +1106,8 @@ describe("exception safety", () => {
   });
 
   it("syncWritePaths tracking: add/remove are always paired", async () => {
-    const { engine, plugin, fm, fw, bc } = buildEngine();
-    const file = plugin.app.vault.addFile("Knowledge/doc.md", "Old content");
+    const { engine, plugin, fm, fw } = buildEngine();
+    plugin.app.vault.addFile("Knowledge/doc.md", "Old content");
     fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge", synced: true });
     plugin.syncState.docMap["doc1"] = {
       sysId: "doc1", path: "Knowledge/doc.md",
@@ -1109,8 +1120,8 @@ describe("exception safety", () => {
     await callHandlePulledDoc(engine, doc, result);
 
     // Every addSyncWritePath should have a corresponding removeSyncWritePath
-    const addCalls = fw.addSyncWritePath.mock.calls.map((c: any[]) => c[0]);
-    const removeCalls = fw.removeSyncWritePath.mock.calls.map((c: any[]) => c[0]);
+    const addCalls = fw.addSyncWritePath.mock.calls.map((c: unknown[]) => c[0] as string);
+    const removeCalls = fw.removeSyncWritePath.mock.calls.map((c: unknown[]) => c[0] as string);
     expect(addCalls).toEqual(removeCalls);
   });
 });
@@ -1179,7 +1190,7 @@ describe("hash-based push discovery", () => {
   it("skips file when mtime has not changed", async () => {
     const { engine, plugin, apiClient, fm } = buildEngine();
     const mtime = Date.now() - 10000;
-    const file = plugin.app.vault.addFile("Knowledge/doc.md", "Content", makeTFile("Knowledge/doc.md", undefined, mtime));
+    plugin.app.vault.addFile("Knowledge/doc.md", "Content", makeTFile("Knowledge/doc.md", undefined, mtime));
     fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge" });
     plugin.syncState.docMap["doc1"] = {
       sysId: "doc1", path: "Knowledge/doc.md",
@@ -1197,7 +1208,7 @@ describe("hash-based push discovery", () => {
 
   it("skips file when mtime bumped but hash unchanged (cosmetic sn_synced write)", async () => {
     const { engine, plugin, apiClient, fm } = buildEngine();
-    const file = plugin.app.vault.addFile("Knowledge/doc.md", "Content");
+    plugin.app.vault.addFile("Knowledge/doc.md", "Content");
     fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge" });
     plugin.syncState.docMap["doc1"] = {
       sysId: "doc1", path: "Knowledge/doc.md",
@@ -1216,7 +1227,7 @@ describe("hash-based push discovery", () => {
 
   it("pushes file when hash changed", async () => {
     const { engine, plugin, apiClient, fm } = buildEngine();
-    const file = plugin.app.vault.addFile("Knowledge/doc.md", "New content");
+    plugin.app.vault.addFile("Knowledge/doc.md", "New content");
     fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge" });
     plugin.syncState.docMap["doc1"] = {
       sysId: "doc1", path: "Knowledge/doc.md",
@@ -1234,7 +1245,7 @@ describe("hash-based push discovery", () => {
 
   it("discovers new files by category without sys_id", async () => {
     const { engine, plugin, apiClient, fm } = buildEngine();
-    const file = plugin.app.vault.addFile("Knowledge/new-doc.md", "New doc content");
+    plugin.app.vault.addFile("Knowledge/new-doc.md", "New doc content");
     fm._state.set("Knowledge/new-doc.md", { category: "kb_knowledge" }); // no sys_id
 
     apiClient.getChanges.mockResolvedValue({ ok: true, data: [], status: 200 });
@@ -1247,7 +1258,7 @@ describe("hash-based push discovery", () => {
   it("backfills legacy entry without pushing (even if server hash differs)", async () => {
     const { engine, plugin, apiClient, fm } = buildEngine();
     const content = "Unchanged content";
-    const file = plugin.app.vault.addFile("Knowledge/doc.md", content);
+    plugin.app.vault.addFile("Knowledge/doc.md", content);
     fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge" });
     plugin.syncState.docMap["doc1"] = {
       sysId: "doc1", path: "Knowledge/doc.md",
@@ -1261,8 +1272,8 @@ describe("hash-based push discovery", () => {
 
     // Should backfill without pushing — legacy entries just establish baseline
     expect(apiClient.updateDocument).not.toHaveBeenCalled();
-    expect(plugin.syncState.docMap["doc1"]!.localContentHash).toBe(md5Hash(content));
-    expect(plugin.syncState.docMap["doc1"]!.lastSyncMtime).toBeDefined();
+    expect(plugin.syncState.docMap["doc1"].localContentHash).toBe(md5Hash(content));
+    expect(plugin.syncState.docMap["doc1"].lastSyncMtime).toBeDefined();
   });
 });
 
@@ -1281,7 +1292,7 @@ describe("pull updates localContentHash and lastSyncMtime", () => {
     const result = freshResult();
     await callHandlePulledDoc(engine, doc, result);
 
-    const entry = plugin.syncState.docMap["doc1"]!;
+    const entry = plugin.syncState.docMap["doc1"];
     expect(entry.localContentHash).toBeDefined();
     expect(entry.lastSyncMtime).toBeDefined();
     expect(entry.contentHash).toBe("newhash");
@@ -1307,7 +1318,7 @@ describe("pull updates localContentHash and lastSyncMtime", () => {
     const result = freshResult();
     await callHandlePulledDoc(engine, doc, result);
 
-    const entry = plugin.syncState.docMap["doc1"]!;
+    const entry = plugin.syncState.docMap["doc1"];
     // localContentHash should NOT have been updated — still the old value
     expect(entry.localContentHash).toBe(origHash);
   });
