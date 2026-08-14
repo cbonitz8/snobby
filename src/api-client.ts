@@ -8,6 +8,11 @@ interface ApiResponse<T> {
 }
 
 export class ApiClient {
+  /** Documents fetched per request by {@link getDocuments}. */
+  private static readonly PAGE_SIZE = 500;
+  /** Hard stop on paging, so a server that ignores `offset` can't loop forever. */
+  private static readonly MAX_PAGES = 100;
+
   private authManager: AuthManager;
   private instanceUrl: string;
   private apiPath: string;
@@ -59,8 +64,41 @@ export class ApiClient {
     }
   }
 
+  /**
+   * Fetch every document, paging through the collection endpoint.
+   *
+   * The server caps each response, so a single request returns a partial list.
+   * Callers (initialPull, discoverNewDocs, findExistingServerDoc) treat the
+   * result as the complete server state, so a short read must surface as an
+   * error rather than as fewer documents.
+   */
   async getDocuments(): Promise<ApiResponse<SNDocument[]>> {
-    return this.request<SNDocument[]>("GET", "/documents");
+    const all: SNDocument[] = [];
+    let offset = 0;
+
+    for (let page = 0; page < ApiClient.MAX_PAGES; page++) {
+      const response = await this.request<SNDocument[]>(
+        "GET",
+        `/documents?limit=${ApiClient.PAGE_SIZE}&offset=${offset}`
+      );
+
+      if (!response.ok || !response.data) {
+        return { ok: false, status: response.status, data: null };
+      }
+
+      const docs = Array.isArray(response.data) ? response.data : [response.data];
+      all.push(...docs);
+
+      if (docs.length < ApiClient.PAGE_SIZE) {
+        return { ok: true, status: response.status, data: all };
+      }
+      offset += ApiClient.PAGE_SIZE;
+    }
+
+    // Only reachable if the server keeps returning full pages — e.g. an
+    // un-upgraded endpoint ignoring `offset`. Refuse rather than return a list
+    // built from the same page repeated.
+    return { ok: false, status: 0, data: null };
   }
 
   async getDocument(id: string): Promise<ApiResponse<SNDocument>> {
