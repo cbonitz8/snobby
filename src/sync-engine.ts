@@ -777,7 +777,21 @@ export class SyncEngine {
         this.frontmatterManager.markSynced(file),
       );
 
-      const entry = this.plugin.syncState.docMap[fm.sys_id];
+      // Self-heal: duplicate server records can leave docMap keyed under a
+      // sys_id the file no longer carries; the baseline below would then miss
+      // and the entry re-pushes forever. Repoint/remove any other key for this path.
+      const docMap = this.plugin.syncState.docMap;
+      for (const [key, staleEntry] of Object.entries(docMap)) {
+        if (key !== fm.sys_id && staleEntry.path === file.path) {
+          if (!docMap[fm.sys_id]) {
+            staleEntry.sysId = fm.sys_id;
+            docMap[fm.sys_id] = staleEntry;
+          }
+          delete docMap[key];
+        }
+      }
+
+      const entry = docMap[fm.sys_id];
       if (entry && updateResult.data) {
         entry.lastServerTimestamp = updateResult.data.sys_updated_on;
         if (updateResult.data.content_hash) {

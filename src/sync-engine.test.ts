@@ -991,6 +991,87 @@ describe("push — handlePushFile", () => {
   });
 });
 
+describe("push — docMap self-heal on sys_id mismatch", () => {
+  it("repoints a docMap entry keyed under a stale sys_id to the file's sys_id", async () => {
+    const { engine, plugin, apiClient, fm } = buildEngine();
+    const file = plugin.app.vault.addFile("Knowledge/doc.md", "Push content");
+    fm._state.set("Knowledge/doc.md", { sys_id: "realId", synced: false });
+    plugin.syncState.docMap["orphanId"] = {
+      sysId: "orphanId", path: "Knowledge/doc.md",
+      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "stalehash",
+      localContentHash: "stalelocal", lastSyncMtime: 0,
+    };
+
+    apiClient.updateDocument.mockResolvedValue({
+      ok: true,
+      data: { sys_updated_on: "2026-01-10 00:00:00", content_hash: "pushedhash" },
+      status: 200,
+    });
+
+    const result = freshResult();
+    await callHandlePushFile(engine, file, result);
+
+    expect(plugin.syncState.docMap["orphanId"]).toBeUndefined();
+    expect(plugin.syncState.docMap["realId"]).toBeDefined();
+    expect(plugin.syncState.docMap["realId"]!.sysId).toBe("realId");
+    expect(plugin.syncState.docMap["realId"]!.lastServerTimestamp).toBe("2026-01-10 00:00:00");
+    expect(plugin.syncState.docMap["realId"]!.contentHash).toBe("pushedhash");
+  });
+
+  it("removes a duplicate docMap entry pointing at the same file", async () => {
+    const { engine, plugin, apiClient, fm } = buildEngine();
+    const file = plugin.app.vault.addFile("Knowledge/doc.md", "Push content");
+    fm._state.set("Knowledge/doc.md", { sys_id: "realId", synced: false });
+    plugin.syncState.docMap["realId"] = {
+      sysId: "realId", path: "Knowledge/doc.md",
+      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "oldhash",
+    };
+    plugin.syncState.docMap["orphanId"] = {
+      sysId: "orphanId", path: "Knowledge/doc.md",
+      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "stalehash",
+    };
+
+    apiClient.updateDocument.mockResolvedValue({
+      ok: true,
+      data: { sys_updated_on: "2026-01-10 00:00:00", content_hash: "pushedhash" },
+      status: 200,
+    });
+
+    const result = freshResult();
+    await callHandlePushFile(engine, file, result);
+
+    expect(plugin.syncState.docMap["orphanId"]).toBeUndefined();
+    expect(plugin.syncState.docMap["realId"].contentHash).toBe("pushedhash");
+    expect(plugin.syncState.docMap["realId"].lastServerTimestamp).toBe("2026-01-10 00:00:00");
+  });
+
+  it("does not touch docMap entries for other files", async () => {
+    const { engine, plugin, apiClient, fm } = buildEngine();
+    const file = plugin.app.vault.addFile("Knowledge/doc.md", "Push content");
+    fm._state.set("Knowledge/doc.md", { sys_id: "realId", synced: false });
+    plugin.syncState.docMap["realId"] = {
+      sysId: "realId", path: "Knowledge/doc.md",
+      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "oldhash",
+    };
+    plugin.syncState.docMap["otherId"] = {
+      sysId: "otherId", path: "Knowledge/other.md",
+      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "otherhash",
+    };
+
+    apiClient.updateDocument.mockResolvedValue({
+      ok: true,
+      data: { sys_updated_on: "2026-01-10 00:00:00", content_hash: "pushedhash" },
+      status: 200,
+    });
+
+    const result = freshResult();
+    await callHandlePushFile(engine, file, result);
+
+    expect(plugin.syncState.docMap["otherId"]).toBeDefined();
+    expect(plugin.syncState.docMap["otherId"].contentHash).toBe("otherhash");
+  });
+});
+
 describe("sync — orchestration", () => {
   it("calls flushPending before pull", async () => {
     const { engine, fw, apiClient } = buildEngine();
