@@ -819,8 +819,8 @@ export class SyncEngine {
         tags = userInput.tags;
       }
 
-      // Check for existing server doc with same title+category before creating
-      const existingDoc = await this.findExistingServerDoc(file.basename, category);
+      // Check for existing server doc with same title+category+project before creating
+      const existingDoc = await this.findExistingServerDoc(file.basename, category, project, result);
       if (existingDoc) {
         return this.adoptAndMergeDoc(file, existingDoc, content, result);
       }
@@ -868,11 +868,53 @@ export class SyncEngine {
     }
   }
 
-  private async findExistingServerDoc(title: string, category: string): Promise<SNDocument | null> {
+  /**
+   * Find the server doc this local file should be adopted into, or null to create.
+   *
+   * Title+category alone is not an identity: many projects carry a note with the
+   * same title and category (one `_overview` per project), so matching without the
+   * project adopts an arbitrary twin and merges two projects' notes together.
+   * Frontmatter may hold either the choice value or its label, so both sides are
+   * normalised to values before comparing.
+   */
+  private async findExistingServerDoc(
+    title: string,
+    category: string,
+    project: string,
+    result: SyncResult,
+  ): Promise<SNDocument | null> {
     const response = await this.apiClient.getDocuments();
     if (!response.ok || !response.data) return null;
     const docs = Array.isArray(response.data) ? response.data : [response.data];
-    return docs.find((d) => d.title === title && d.category === category) ?? null;
+
+    // Normalisation needs the choice lists; without them resolveValue is a no-op
+    // and comparison silently falls back to raw strings.
+    await this.ensureMetadata();
+    const wantCategory = this.resolveValue("categories", category);
+    const wantProject = this.resolveValue("projects", project);
+
+    const sameTitle = docs.filter(
+      (d) => d.title === title && this.resolveValue("categories", d.category) === wantCategory
+    );
+    if (sameTitle.length === 0) return null;
+
+    if (wantProject) {
+      return sameTitle.find((d) => this.resolveValue("projects", d.project) === wantProject) ?? null;
+    }
+
+    // The local note names no project, so there is nothing to disambiguate with.
+    // Adopting one of several twins would push a merge into some other project's
+    // doc — destructive and unrecoverable; a duplicate row is neither.
+    if (sameTitle.length > 1) {
+      result.errors.push(
+        `Ambiguous adopt for ${title}: ${sameTitle.length} server docs share category ` +
+        `"${wantCategory}" across projects (${sameTitle.map((d) => d.project || "(none)").join(", ")}). ` +
+        `Set the project in frontmatter to pick one; created a new doc instead.`
+      );
+      return null;
+    }
+
+    return sameTitle[0] ?? null;
   }
 
   private async adoptAndMergeDoc(

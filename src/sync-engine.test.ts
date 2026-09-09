@@ -1411,3 +1411,118 @@ describe("standup deduplication — adoptAndMergeDoc", () => {
     expect(result.pushed).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Adoption is scoped by project: many projects hold a note with the same
+// title+category (e.g. one `_overview` per project), so title+category alone
+// picks an arbitrary twin and merges two projects' notes together.
+// ---------------------------------------------------------------------------
+
+describe("findExistingServerDoc — project scoping", () => {
+  function overviewDocs() {
+    return [
+      makeDoc({
+        sys_id: "vendorOverview",
+        title: "_overview",
+        content: "### Vendor\n\nVendor overview\n",
+        category: "project_overview",
+        project: "vendor",
+        content_hash: "vendorhash",
+      }),
+      makeDoc({
+        sys_id: "eisOverview",
+        title: "_overview",
+        content: "### EIS\n\nEIS overview\n",
+        category: "project_overview",
+        project: "eis",
+        content_hash: "eishash",
+      }),
+    ];
+  }
+
+  it("adopts the twin belonging to the local note's project", async () => {
+    const { engine, plugin, apiClient, fm } = buildEngine();
+    const file = plugin.app.vault.addFile("EIS/_overview.md", "### Caleb\n\nLocal EIS overview\n");
+    fm._state.set("EIS/_overview.md", { category: "project_overview", project: "eis" });
+
+    apiClient.getDocuments.mockResolvedValue({ ok: true, data: overviewDocs(), status: 200 });
+
+    const result = freshResult();
+    await callHandlePushFile(engine, file, result);
+
+    expect(apiClient.createDocument).not.toHaveBeenCalled();
+    expect(apiClient.updateDocument).toHaveBeenCalled();
+    expect(apiClient.updateDocument.mock.calls[0]![0]).toBe("eisOverview");
+    expect(fm._state.get("EIS/_overview.md")?.sys_id).toBe("eisOverview");
+  });
+
+  it("creates when no twin belongs to the local note's project", async () => {
+    const { engine, plugin, apiClient, fm } = buildEngine();
+    const file = plugin.app.vault.addFile("Snobby/_overview.md", "### Caleb\n\nSnobby overview\n");
+    fm._state.set("Snobby/_overview.md", { category: "project_overview", project: "snobby" });
+
+    apiClient.getDocuments.mockResolvedValue({ ok: true, data: overviewDocs(), status: 200 });
+
+    const result = freshResult();
+    await callHandlePushFile(engine, file, result);
+
+    expect(apiClient.updateDocument).not.toHaveBeenCalled();
+    expect(apiClient.createDocument).toHaveBeenCalled();
+  });
+
+  it("refuses to adopt an ambiguous match when the local note names no project", async () => {
+    const { engine, plugin, apiClient, fm } = buildEngine();
+    const file = plugin.app.vault.addFile("_overview.md", "### Caleb\n\nOverview\n");
+    fm._state.set("_overview.md", { category: "project_overview" });
+
+    apiClient.getDocuments.mockResolvedValue({ ok: true, data: overviewDocs(), status: 200 });
+
+    const result = freshResult();
+    await callHandlePushFile(engine, file, result);
+
+    // Merging into an arbitrary project's note is destructive; a duplicate is not.
+    expect(apiClient.updateDocument).not.toHaveBeenCalled();
+    expect(apiClient.createDocument).toHaveBeenCalled();
+    expect(result.errors.join(" ")).toMatch(/_overview/);
+  });
+
+  it("still adopts an unambiguous match when the local note names no project", async () => {
+    const { engine, plugin, apiClient, fm } = buildEngine();
+    const file = plugin.app.vault.addFile("Standups/2026-04-22.md", "### Caleb\n\nStandup\n");
+    fm._state.set("Standups/2026-04-22.md", { category: "standup" });
+
+    apiClient.getDocuments.mockResolvedValue({
+      ok: true,
+      data: [makeDoc({ sys_id: "server1", title: "2026-04-22", category: "standup", project: "eis" })],
+      status: 200,
+    });
+
+    const result = freshResult();
+    await callHandlePushFile(engine, file, result);
+
+    expect(apiClient.updateDocument).toHaveBeenCalled();
+    expect(apiClient.updateDocument.mock.calls[0]![0]).toBe("server1");
+  });
+
+  it("matches a project written as a label against the server's value", async () => {
+    const { engine, plugin, apiClient, fm } = buildEngine();
+    const file = plugin.app.vault.addFile("P1/note.md", "### Caleb\n\nNote\n");
+    // Frontmatter holds the human label; the server stores the choice value.
+    fm._state.set("P1/note.md", { category: "Knowledge", project: "Project 1" });
+
+    apiClient.getDocuments.mockResolvedValue({
+      ok: true,
+      data: [
+        makeDoc({ sys_id: "other", title: "note", category: "kb_knowledge", project: "proj2" }),
+        makeDoc({ sys_id: "wanted", title: "note", category: "kb_knowledge", project: "proj1" }),
+      ],
+      status: 200,
+    });
+
+    const result = freshResult();
+    await callHandlePushFile(engine, file, result);
+
+    expect(apiClient.updateDocument).toHaveBeenCalled();
+    expect(apiClient.updateDocument.mock.calls[0]![0]).toBe("wanted");
+  });
+});
