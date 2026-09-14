@@ -1,6 +1,13 @@
-import { Notice, requestUrl } from "obsidian";
+import { Notice } from "obsidian";
 import type SNSyncPlugin from "./main";
 import type { AuthTokens } from "./types";
+import { httpRequest, type HttpRequestOptions, type HttpResponse } from "./http";
+
+interface TokenResponse {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+}
 
 const TOKEN_EXPIRY_BUFFER_MS = 60_000; // Refresh 1 minute before expiry
 
@@ -9,7 +16,10 @@ export class AuthManager {
   private pendingOAuthState: string | null = null;
   private refreshPromise: Promise<boolean> | null = null;
 
-  constructor(plugin: SNSyncPlugin) {
+  constructor(
+    plugin: SNSyncPlugin,
+    private request: (options: HttpRequestOptions) => Promise<HttpResponse> = httpRequest
+  ) {
     this.plugin = plugin;
   }
 
@@ -55,7 +65,7 @@ export class AuthManager {
     const { instanceUrl, oauthClientId, oauthClientSecret, oauthRedirectUri } = this.plugin.settings;
 
     try {
-      const response = await requestUrl({
+      const response = await this.request({
         url: `${instanceUrl}/oauth_token.do`,
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -68,7 +78,7 @@ export class AuthManager {
         }).toString(),
       });
 
-      const data = response.json;
+      const data = response.json as TokenResponse;
       this.plugin.authTokens = {
         accessToken: data.access_token,
         refreshToken: data.refresh_token,
@@ -96,7 +106,7 @@ export class AuthManager {
     const { instanceUrl, oauthClientId, oauthClientSecret } = this.plugin.settings;
 
     try {
-      const response = await requestUrl({
+      const response = await this.request({
         url: `${instanceUrl}/oauth_token.do`,
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -108,7 +118,7 @@ export class AuthManager {
         }).toString(),
       });
 
-      const data = response.json;
+      const data = response.json as TokenResponse;
       this.plugin.authTokens = {
         accessToken: data.access_token,
         refreshToken: data.refresh_token ?? this.tokens.refreshToken,
@@ -145,7 +155,7 @@ export class AuthManager {
     };
 
     try {
-      const response = await requestUrl({
+      const response = await this.request({
         url,
         method: options.method ?? "GET",
         headers,
@@ -158,7 +168,7 @@ export class AuthManager {
         const refreshed = await this.refreshAccessToken();
         if (!refreshed) return null;
         headers.Authorization = `Bearer ${this.tokens.accessToken}`;
-        const retry = await requestUrl({
+        const retry = await this.request({
           url,
           method: options.method ?? "GET",
           headers,
