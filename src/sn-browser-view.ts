@@ -5,6 +5,7 @@ import { computeSideBySide, extractSideBySideHunks, type DiffLine } from "./diff
 import { stripFrontmatter } from "./frontmatter-manager";
 import { seedLineChoices, buttonState, filterDocs, docStatus } from "./conflict-view-logic";
 import type { PreparedSection } from "./conflict-resolver";
+import { computeSyncOverview } from "./sync-overview";
 
 export const VIEW_TYPE_SN_BROWSER = "sn-document-browser";
 
@@ -88,6 +89,7 @@ export class SNBrowserView extends ItemView {
     if (this.activeTab === "browse") {
       await this.renderBrowseTab(content);
     } else {
+      await this.fetchData();
       this.renderSettingsTab(content);
     }
   }
@@ -248,18 +250,39 @@ export class SNBrowserView extends ItemView {
 
   private renderSettingsTab(container: HTMLElement) {
     const stats = container.createDiv({ cls: "sn-sync-stats" });
-    const totalServer = this.serverDocs.length;
-    const totalLocal = Object.keys(this.plugin.syncState.docMap).length;
-    const excludeCount = this.plugin.settings.excludePaths.length;
-
     const conflicts = this.plugin.conflictResolver.getAllConflicts();
+    const overview = computeSyncOverview({
+      serverIds: this.serverDocs.map((d) => d.sys_id),
+      docMapIds: Object.keys(this.plugin.syncState.docMap),
+      ignoredIds: this.plugin.syncState.ignoredIds,
+      excludePathCount: this.plugin.settings.excludePaths.length,
+      conflictCount: conflicts.length,
+    });
 
-    stats.createEl("h3", { text: "Sync overview" });
+    const statsHeader = stats.createDiv({ cls: "sn-stats-header" });
+    statsHeader.createEl("h3", { text: "Sync overview" });
+    const refreshStats = statsHeader.createEl("button", {
+      text: "↻",
+      cls: "sn-filter-refresh",
+      attr: { "aria-label": "Refresh server counts" },
+    });
+    refreshStats.addEventListener("click", () => {
+      this.serverDocs = [];
+      void this.render();
+    });
+
     const statGrid = stats.createDiv({ cls: "sn-stat-grid" });
-    this.createStatCard(statGrid, String(totalServer), "On server");
-    this.createStatCard(statGrid, String(totalLocal), "Downloaded");
-    this.createStatCard(statGrid, String(excludeCount), "Excluded paths");
-    this.createStatCard(statGrid, String(conflicts.length), "Conflicts", conflicts.length > 0);
+    this.createStatCard(statGrid, String(overview.onServer), "On server");
+    this.createStatCard(statGrid, String(overview.downloaded), "Downloaded");
+    this.createStatCard(
+      statGrid,
+      String(overview.notDownloaded),
+      "Not downloaded",
+      overview.notDownloaded > 0,
+    );
+    this.createStatCard(statGrid, String(overview.ignored), "Ignored");
+    this.createStatCard(statGrid, String(overview.excludedPaths), "Excluded paths");
+    this.createStatCard(statGrid, String(overview.conflicts), "Conflicts", overview.conflicts > 0);
 
     const dangerSection = container.createDiv({ cls: "sn-exclude-section" });
     dangerSection.createEl("h3", { text: "Reset & re-pull" });
