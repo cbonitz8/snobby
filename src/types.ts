@@ -35,6 +35,8 @@ export interface ConflictEntry {
   path: string;
   remoteContent: string;
   remoteTimestamp: string;
+  /** Server content hash the user resolved against; becomes the push baseline on resolution. */
+  remoteContentHash?: string;
   sectionConflicts?: SectionConflict[];
   ancestorContent?: string;
 }

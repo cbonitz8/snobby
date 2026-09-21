@@ -546,6 +546,7 @@ export class SyncEngine {
         path: mapEntry.path,
         remoteContent: doc.content,
         remoteTimestamp: doc.sys_updated_on,
+        remoteContentHash: doc.content_hash,
         sectionConflicts: outcome.sectionConflicts,
       });
       result.conflicts++;
@@ -563,6 +564,9 @@ export class SyncEngine {
     // Part 1: Iterate docMap entries (existing tracked files)
     for (const [sysId, entry] of Object.entries(this.plugin.syncState.docMap)) {
       if (this.plugin.syncState.conflicts[sysId]) continue;
+      // Ignore is both directions: the pull phase skips these ids, so pushing
+      // them would keep writing to a record the user took out of sync.
+      if (this.plugin.syncState.ignoredIds.includes(sysId)) continue;
 
       const file = vault.getAbstractFileByPath(entry.path);
       if (!(file instanceof TFile)) continue;
@@ -644,6 +648,7 @@ export class SyncEngine {
     const content = await this.getContentForPushInternal(file);
 
     if (fm.sys_id && this.plugin.syncState.conflicts[fm.sys_id]) return null;
+    if (fm.sys_id && this.plugin.syncState.ignoredIds.includes(fm.sys_id)) return null;
     if (this.conflictResolver.getConflictForPath(file.path)) return null;
 
     if (fm.sys_id) {
@@ -711,6 +716,7 @@ export class SyncEngine {
                   path: file.path,
                   remoteContent: conflictData.content,
                   remoteTimestamp: conflictData.sys_updated_on,
+                  remoteContentHash: conflictData.content_hash,
                   sectionConflicts: outcome.sectionConflicts,
                   ancestorContent: conflictData.ancestor_content ?? undefined,
                 });
@@ -760,6 +766,7 @@ export class SyncEngine {
                     path: file.path,
                     remoteContent: latest.data.content,
                     remoteTimestamp: latest.data.sys_updated_on,
+                    remoteContentHash: latest.data.content_hash,
                     sectionConflicts: outcome.sectionConflicts,
                   });
                   result.conflicts++;

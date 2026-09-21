@@ -991,6 +991,68 @@ describe("push — handlePushFile", () => {
   });
 });
 
+describe("push — ignoredIds", () => {
+  it("does not push a docMap entry whose sys_id the user ignored", async () => {
+    const { engine, plugin, apiClient, fm } = buildEngine();
+    plugin.app.vault.addFile("Knowledge/doc.md", "Edited locally");
+    fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge" });
+    plugin.syncState.docMap["doc1"] = {
+      sysId: "doc1", path: "Knowledge/doc.md",
+      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "hash1",
+      localContentHash: md5Hash("Original"),
+      lastSyncMtime: 0,
+    };
+    plugin.syncState.ignoredIds.push("doc1");
+
+    const result = freshResult();
+    await callPush(engine, result);
+
+    expect(apiClient.updateDocument).not.toHaveBeenCalled();
+    expect(result.pushed).toBe(0);
+  });
+
+  it("handlePushFile refuses an ignored sys_id reached by any other route", async () => {
+    const { engine, plugin, apiClient, fm } = buildEngine();
+    const file = plugin.app.vault.addFile("Knowledge/doc.md", "Edited locally");
+    fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge" });
+    plugin.syncState.docMap["doc1"] = {
+      sysId: "doc1", path: "Knowledge/doc.md",
+      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "hash1",
+    };
+    plugin.syncState.ignoredIds.push("doc1");
+
+    const result = freshResult();
+    const ts = await callHandlePushFile(engine, file, result);
+
+    expect(ts).toBeNull();
+    expect(apiClient.updateDocument).not.toHaveBeenCalled();
+  });
+
+  it("still pushes a tracked doc that is not ignored", async () => {
+    const { engine, plugin, apiClient, fm } = buildEngine();
+    plugin.app.vault.addFile("Knowledge/doc.md", "Edited locally");
+    fm._state.set("Knowledge/doc.md", { sys_id: "doc1", category: "kb_knowledge" });
+    plugin.syncState.docMap["doc1"] = {
+      sysId: "doc1", path: "Knowledge/doc.md",
+      lastServerTimestamp: "2026-01-01 00:00:00", contentHash: "hash1",
+      localContentHash: md5Hash("Original"),
+      lastSyncMtime: 0,
+    };
+    plugin.syncState.ignoredIds.push("otherdoc");
+    apiClient.updateDocument.mockResolvedValue({
+      ok: true,
+      data: { sys_updated_on: "2026-01-10 00:00:00", content_hash: "pushedhash" },
+      status: 200,
+    });
+
+    const result = freshResult();
+    await callPush(engine, result);
+
+    expect(apiClient.updateDocument).toHaveBeenCalled();
+    expect(result.pushed).toBe(1);
+  });
+});
+
 describe("push — docMap self-heal on sys_id mismatch", () => {
   it("repoints a docMap entry keyed under a stale sys_id to the file's sys_id", async () => {
     const { engine, plugin, apiClient, fm } = buildEngine();

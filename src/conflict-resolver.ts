@@ -19,7 +19,7 @@ export interface PreparedLineDiff {
   path: string;
   sections: PreparedSection[];
 }
-import { contentHash } from "./content-hash";
+import { contentHash, md5Hash } from "./content-hash";
 import { computeLocalHash } from "./sync-engine";
 
 const MARKER_LOCAL = "<<<<<<< Local (Obsidian)";
@@ -128,6 +128,21 @@ export class ConflictResolver {
     this.plugin.syncState.conflicts[entry.sysId] = entry;
   }
 
+  /**
+   * A resolution incorporates the server version it was shown, so that version
+   * becomes the push baseline. Without this the next push keeps sending the
+   * pre-conflict hash, the server 409s against the same ancestor, and the very
+   * same conflict is raised again on every sync.
+   */
+  private adoptRemoteBaseline(conflict: ConflictEntry) {
+    const entry = this.plugin.syncState.docMap[conflict.sysId];
+    if (!entry) return;
+    // Conflicts recorded before the hash was carried have none stored; the server
+    // hash is md5 of the same normalized content, so recompute it from the body.
+    entry.contentHash = conflict.remoteContentHash ?? md5Hash(conflict.remoteContent);
+    entry.lastServerTimestamp = conflict.remoteTimestamp;
+  }
+
   async resolveWithPull(sysId: string) {
     const conflict = this.plugin.syncState.conflicts[sysId];
     if (!conflict) return;
@@ -150,6 +165,8 @@ export class ConflictResolver {
         synced: true,
       });
     });
+
+    this.adoptRemoteBaseline(conflict);
 
     const entry = this.plugin.syncState.docMap[sysId];
     if (entry) {
@@ -178,6 +195,7 @@ export class ConflictResolver {
       await this.plugin.frontmatterManager.markDirty(file);
     }
 
+    this.adoptRemoteBaseline(conflict);
     this.plugin.syncEngine.addSkipPullId(sysId);
     delete this.plugin.syncState.conflicts[sysId];
     await this.plugin.saveSettings();
@@ -216,6 +234,7 @@ export class ConflictResolver {
 
     await this.baseCache.saveBase(sysId, mergedBody);
 
+    this.adoptRemoteBaseline(conflict);
     this.plugin.syncEngine.addSkipPullId(sysId);
     delete this.plugin.syncState.conflicts[sysId];
     await this.plugin.saveSettings();
@@ -258,6 +277,7 @@ export class ConflictResolver {
 
     await this.baseCache.saveBase(sysId, mergedBody);
 
+    this.adoptRemoteBaseline(conflict);
     this.plugin.syncEngine.addSkipPullId(sysId);
     delete this.plugin.syncState.conflicts[sysId];
     await this.plugin.saveSettings();
